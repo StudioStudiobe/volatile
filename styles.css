@@ -130,4 +130,12 @@ button.preset, button.exp { background: #2a2f36; }
   width: auto;
   height: auto;
   box-shadow: 0 8px 40px rgba(0,0,0,.55);
+  touch-action: none;        /* let pointer-drag work on touch without scrolling */
+}
+.preview .shape { cursor: move; }
+.preview .handle { cursor: nwse-resize; }
+
+.layer.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }

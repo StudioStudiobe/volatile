@@ -22,6 +22,7 @@ const state = {
   invert: false,                 // global black/white swap
   base: { angle: 0, line: 16, inverted: false },  // stripe field; gap = line / 2 (derived)
   layers: [],
+  selectedId: null,
 };
 
 const ink   = () => (state.invert ? '#ffffff' : '#000000');
@@ -117,7 +118,7 @@ function layerAttrs(op, patterns) {
   return `fill="url(#${key})" stroke="none"`;
 }
 
-function buildSVG() {
+function buildSVG(forExport) {
   const { w, h } = state.doc;
   const patterns = new Map();
   const baseKey = patKey(state.base.angle, state.base.line, state.base.inverted);
@@ -131,8 +132,11 @@ function buildSVG() {
     const attrs = layerAttrs(L.op, patterns);
     const [cx, cy] = shapeCenter(L.shape);
     const tf = L.rotate ? `rotate(${L.rotate} ${cx} ${cy})` : '';
-    body += shapeMarkup(L.shape, attrs, tf);
+    const meta = forExport ? '' : ` class="shape" data-id="${L.id}"`;
+    body += shapeMarkup(L.shape, attrs + meta, tf);
   }
+
+  if (!forExport && state.selectedId) body += selectionOverlay();
 
   const defs = `<defs>${[...patterns.values()].join('')}</defs>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" `
@@ -141,7 +145,7 @@ function buildSVG() {
 
 function renderSVG() {
   if (typeof document === 'undefined') return;
-  document.getElementById('preview').innerHTML = buildSVG();
+  document.getElementById('preview').innerHTML = buildSVG(false);
 }
 
 /* ============================================================
@@ -253,10 +257,16 @@ function layerCard(L, i) {
     el('input', { type: 'text', class: 'lname', value: L.name, oninput: (e) => { L.name = e.target.value; } }),
     btn('▲', () => move(i, -1), 'mini'),
     btn('▼', () => move(i, 1), 'mini'),
-    btn('⧉', () => { const c = JSON.parse(JSON.stringify(L)); c.id = nid(); state.layers.splice(i + 1, 0, c); renderAll(); }, 'mini'),
-    btn('✕', () => { state.layers.splice(i, 1); renderAll(); }, 'mini danger'),
+    btn('⧉', () => { const c = JSON.parse(JSON.stringify(L)); c.id = nid(); state.layers.splice(i + 1, 0, c); state.selectedId = c.id; renderAll(); }, 'mini'),
+    btn('✕', () => { if (state.selectedId === L.id) state.selectedId = null; state.layers.splice(i, 1); renderAll(); }, 'mini danger'),
   );
-  return el('div', { class: 'layer' },
+  return el('div', {
+      class: 'layer' + (L.id === state.selectedId ? ' active' : ''),
+      onclick: (e) => {
+        if (e.target.closest('input, select, textarea, button')) return;
+        if (state.selectedId !== L.id) { state.selectedId = L.id; renderAll(); }
+      },
+    },
     head,
     checkField('Visible', L.visible, (v) => { L.visible = v; renderSVG(); }),
     selectField('Shape', L.shape.type, SHAPES.map((s) => [s, s]), (t) => { L.shape = makeShape(t); renderAll(); }),
@@ -301,9 +311,10 @@ function renderControls() {
   const wrap = el('div', {});
   state.layers.forEach((L, i) => wrap.append(layerCard(L, i)));
   p.append(section('Layers', [
+    el('p', { class: 'hint' }, 'Drag a shape on the canvas to move it; drag a corner square to resize. Click a shape or layer to select.'),
     wrap,
     el('div', { class: 'addrow' },
-      ...SHAPES.map((t) => btn('+ ' + t, () => { state.layers.push(defaultLayer(t)); renderAll(); }, 'add'))),
+      ...SHAPES.map((t) => btn('+ ' + t, () => { const L = defaultLayer(t); state.layers.push(L); state.selectedId = L.id; renderAll(); }, 'add'))),
   ]));
 
   p.append(section('Presets', [
@@ -335,11 +346,11 @@ function download(blob, name) {
 }
 
 function exportSVG() {
-  download(new Blob([buildSVG()], { type: 'image/svg+xml' }), 'linework.svg');
+  download(new Blob([buildSVG(true)], { type: 'image/svg+xml' }), 'linework.svg');
 }
 
 function exportPNG(scale) {
-  const url = URL.createObjectURL(new Blob([buildSVG()], { type: 'image/svg+xml' }));
+  const url = URL.createObjectURL(new Blob([buildSVG(true)], { type: 'image/svg+xml' }));
   const img = new Image();
   img.onload = () => {
     const c = document.createElement('canvas');
@@ -402,9 +413,158 @@ function loadPreset(name) {
   renderAll();
 }
 
+/* ============================================================
+   Canvas interaction — drag to move, corner handles to resize
+   ============================================================ */
+const clone = (o) => JSON.parse(JSON.stringify(o));
+
+function shapeBBox(s) {
+  switch (s.type) {
+    case 'circle': case 'sector': return [s.cx - s.r, s.cy - s.r, 2 * s.r, 2 * s.r];
+    case 'ellipse': return [s.cx - s.rx, s.cy - s.ry, 2 * s.rx, 2 * s.ry];
+    case 'rect': return [s.x, s.y, s.w, s.h];
+    case 'polygon': {
+      const xs = s.points.map((p) => p[0]), ys = s.points.map((p) => p[1]);
+      const minx = Math.min(...xs), miny = Math.min(...ys);
+      return [minx, miny, Math.max(...xs) - minx, Math.max(...ys) - miny];
+    }
+  }
+}
+
+function selectionOverlay() {
+  const L = state.layers.find((l) => l.id === state.selectedId);
+  if (!L || !L.visible) return '';
+  const [bx, by, bw, bh] = shapeBBox(L.shape);
+  const [cx, cy] = shapeCenter(L.shape);
+  const tf = L.rotate ? ` transform="rotate(${L.rotate} ${cx} ${cy})"` : '';
+  const hs = Math.max(state.doc.w, state.doc.h) / 90;   // handle size (user units)
+  const sw = hs / 3, ac = '#3b82f6';
+  const corners = [[bx, by], [bx + bw, by], [bx + bw, by + bh], [bx, by + bh]];
+  let g = `<g${tf}>`;
+  g += `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="none" stroke="${ac}" `
+     + `stroke-width="${sw}" stroke-dasharray="${hs} ${hs * 0.6}" pointer-events="none"/>`;
+  for (const [hx, hy] of corners) {
+    g += `<rect class="handle" data-handle="1" x="${hx - hs / 2}" y="${hy - hs / 2}" `
+       + `width="${hs}" height="${hs}" fill="#ffffff" stroke="${ac}" stroke-width="${sw}"/>`;
+  }
+  return g + `</g>`;
+}
+
+function toLocal(vx, vy, angleDeg) {           // rotate a vector by -angle, into the shape's frame
+  const a = -(angleDeg || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  return [vx * c - vy * s, vx * s + vy * c];
+}
+
+function translateShape(shape, snap, dx, dy) {
+  switch (shape.type) {
+    case 'circle': case 'ellipse': case 'sector':
+      shape.cx = snap.cx + dx; shape.cy = snap.cy + dy; break;
+    case 'rect':
+      shape.x = snap.x + dx; shape.y = snap.y + dy; break;
+    case 'polygon':
+      shape.points = snap.points.map((p) => [p[0] + dx, p[1] + dy]); break;
+  }
+}
+
+function resizeShape(d, ux, uy) {               // center-anchored, rotation-aware
+  const sh = d.L.shape, [cx, cy] = d.center;
+  const [lx, ly] = toLocal(ux - cx, uy - cy, d.L.rotate);
+  const MIN = 4;
+  switch (sh.type) {
+    case 'circle': case 'sector':
+      sh.r = Math.max(MIN, Math.hypot(lx, ly)); break;
+    case 'ellipse':
+      sh.rx = Math.max(MIN, Math.abs(lx)); sh.ry = Math.max(MIN, Math.abs(ly)); break;
+    case 'rect': {
+      const w = Math.max(MIN, Math.abs(lx) * 2), h = Math.max(MIN, Math.abs(ly) * 2);
+      sh.w = w; sh.h = h; sh.x = cx - w / 2; sh.y = cy - h / 2; break;
+    }
+    case 'polygon': {
+      const r0 = Math.hypot(d.startLocal[0], d.startLocal[1]) || 1;
+      const k = Math.max(0.05, Math.hypot(lx, ly) / r0);
+      sh.points = d.snap.points.map((p) => [cx + (p[0] - cx) * k, cy + (p[1] - cy) * k]); break;
+    }
+  }
+}
+
+let drag = null, pendingMouse = null, rafQueued = false;
+
+function userCoords(e, rect, sx, sy) {
+  return [(e.clientX - rect.left) * sx, (e.clientY - rect.top) * sy];
+}
+
+function onCanvasDown(e) {
+  const svg = document.querySelector('#preview svg');
+  if (!svg) return;
+  const rect = svg.getBoundingClientRect();
+  const sx = state.doc.w / rect.width, sy = state.doc.h / rect.height;
+  const [ux, uy] = userCoords(e, rect, sx, sy);
+
+  if (e.target.closest('[data-handle]') && state.selectedId) {
+    const L = state.layers.find((l) => l.id === state.selectedId);
+    if (!L) return;
+    const center = shapeCenter(L.shape);
+    drag = { mode: 'resize', L, rect, sx, sy, snap: clone(L.shape), center,
+             startLocal: toLocal(ux - center[0], uy - center[1], L.rotate) };
+    e.preventDefault();
+    return;
+  }
+
+  const shapeEl = e.target.closest('[data-id]');
+  if (shapeEl) {
+    const id = shapeEl.getAttribute('data-id');
+    const L = state.layers.find((l) => l.id === id);
+    if (!L) return;
+    if (state.selectedId !== id) { state.selectedId = id; renderControls(); scrollActiveIntoView(); }
+    drag = { mode: 'move', L, rect, sx, sy, snap: clone(L.shape), startUser: [ux, uy] };
+    renderSVG();
+    e.preventDefault();
+    return;
+  }
+
+  if (state.selectedId) { state.selectedId = null; renderControls(); renderSVG(); }
+}
+
+function onCanvasMove(e) {
+  if (!drag) return;
+  e.preventDefault();
+  pendingMouse = e;
+  if (!rafQueued) { rafQueued = true; requestAnimationFrame(applyDrag); }
+}
+
+function applyDrag() {
+  rafQueued = false;
+  if (!drag || !pendingMouse) return;
+  const [ux, uy] = userCoords(pendingMouse, drag.rect, drag.sx, drag.sy);
+  if (drag.mode === 'move') {
+    translateShape(drag.L.shape, drag.snap, ux - drag.startUser[0], uy - drag.startUser[1]);
+  } else {
+    resizeShape(drag, ux, uy);
+  }
+  renderSVG();
+}
+
+function onCanvasUp() {
+  if (!drag) return;
+  drag = null;
+  renderControls();   // sync the numeric fields with the dragged geometry
+}
+
+function scrollActiveIntoView() {
+  const a = document.querySelector('.panel .layer.active');
+  if (a) a.scrollIntoView({ block: 'nearest' });
+}
+
+function initCanvas() {
+  document.getElementById('preview').addEventListener('pointerdown', onCanvasDown);
+  window.addEventListener('pointermove', onCanvasMove);
+  window.addEventListener('pointerup', onCanvasUp);
+}
+
 /* ---------- Boot ---------- */
 if (typeof document !== 'undefined') {
   loadPreset('dome');
+  initCanvas();
 } else if (typeof module !== 'undefined') {
   module.exports = { state, buildSVG, loadPreset };  // for headless rendering / tests
 }

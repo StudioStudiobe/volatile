@@ -41,6 +41,11 @@ A global **Invert** swaps black and white for the whole composition.
 > That's how the "XOR" look (a shape re-filling only the negative area) is made —
 > no boolean engine needed yet.
 
+### On the canvas
+Click a shape (or its layer) to select it, **drag** to move, and drag a **corner
+handle** to resize (center-anchored, rotation-aware). The numeric fields sync when
+you release. Selection handles never appear in the exported SVG.
+
 ## Presets
 Four buttons reproduce the reference mechanisms to start from:
 **Dome + triangle** (orientation shift + knock-out), **Focus capsules**
@@ -62,4 +67,4 @@ Actions*. The site then publishes at `https://studiostudiobe.github.io/volatile/
 - Curved stripe fields (the wrapping/contour effect).
 - Typography layer; multi-page / spread guides.
 - **Randomise / generate variants** if we want a generative mode.
-- Drag-to-position on the canvas instead of numeric fields.
+- Multi-select, snapping and a rotate handle on the canvas (single-shape move + resize already work).

@@ -18,7 +18,7 @@ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /* ---------- State ---------- */
 const state = {
-  doc: { w: 2000, h: 1000 },
+  doc: { w: 1414, h: 2000 },     // default: poster (A-series portrait)
   invert: false,                 // global black/white swap
   base: { angle: 0, line: 16, inverted: false },  // stripe field; gap = line / 2 (derived)
   layers: [],
@@ -416,6 +416,19 @@ function loadPreset(name) {
   renderAll();
 }
 
+function loadDefault() {                  // poster-format starting canvas
+  state.doc = { w: 1414, h: 2000 };
+  state.base = { angle: 0, line: 16, inverted: false };
+  state.invert = false;
+  state.layers = [
+    { id: nid(), name: 'Circle', visible: true, rotate: 0, border: true,
+      shape: { type: 'circle', cx: 707, cy: 1000, r: 470 },
+      op: { type: 'stripes', angle: 90, line: 0, inverted: false } },
+  ];
+  state.selectedId = null;
+  renderAll();
+}
+
 /* ============================================================
    Canvas interaction — drag to move, corner handles to resize
    ============================================================ */
@@ -566,7 +579,7 @@ function initCanvas() {
 
 /* ---------- Boot ---------- */
 if (typeof document !== 'undefined') {
-  loadPreset('dome');
+  loadDefault();
   initCanvas();
 } else if (typeof module !== 'undefined') {
   module.exports = { state, buildSVG, loadPreset };  // for headless rendering / tests

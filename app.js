@@ -20,7 +20,7 @@ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const state = {
   doc: { w: 2000, h: 1000 },
   invert: false,                 // global black/white swap
-  base: { angle: 0, line: 16 },  // stripe field; gap = line / 2 (derived)
+  base: { angle: 0, line: 16, inverted: false },  // stripe field; gap = line / 2 (derived)
   layers: [],
 };
 
@@ -120,8 +120,8 @@ function layerAttrs(op, patterns) {
 function buildSVG() {
   const { w, h } = state.doc;
   const patterns = new Map();
-  const baseKey = patKey(state.base.angle, state.base.line, false);
-  patterns.set(baseKey, patDef(state.base.angle, state.base.line, false));
+  const baseKey = patKey(state.base.angle, state.base.line, state.base.inverted);
+  patterns.set(baseKey, patDef(state.base.angle, state.base.line, state.base.inverted));
 
   let body = `<rect x="0" y="0" width="${w}" height="${h}" fill="${paper()}"/>`
            + `<rect x="0" y="0" width="${w}" height="${h}" fill="url(#${baseKey})"/>`;
@@ -140,6 +140,7 @@ function buildSVG() {
 }
 
 function renderSVG() {
+  if (typeof document === 'undefined') return;
   document.getElementById('preview').innerHTML = buildSVG();
 }
 
@@ -279,6 +280,7 @@ function sizeRow() {
    Control panel
    ============================================================ */
 function renderControls() {
+  if (typeof document === 'undefined') return;
   const p = document.getElementById('panel');
   p.innerHTML = '';
 
@@ -286,12 +288,13 @@ function renderControls() {
     numField('Width', state.doc.w, 100, 6000, 10, (v) => { state.doc.w = v; renderSVG(); }),
     numField('Height', state.doc.h, 100, 6000, 10, (v) => { state.doc.h = v; renderSVG(); }),
     sizeRow(),
-    checkField('Invert black / white', state.invert, (v) => { state.invert = v; renderSVG(); }),
+    checkField('Invert whole image', state.invert, (v) => { state.invert = v; renderSVG(); }),
   ]));
 
   p.append(section('Base field', [
     numField('Angle°', state.base.angle, 0, 180, 1, (v) => { state.base.angle = v; renderSVG(); }),
     numField('Line width x', state.base.line, 1, 240, 1, (v) => { state.base.line = v; renderSVG(); }),
+    checkField('Inverted (white-dominant)', state.base.inverted, (v) => { state.base.inverted = v; renderSVG(); }),
     el('p', { class: 'hint' }, 'Gap is locked to x / 2.'),
   ]));
 
@@ -376,15 +379,15 @@ function loadPreset(name) {
     }));
   } else if (name === 'diag') {
     state.doc = { w: 1414, h: 2000 };
-    state.base = { angle: 45, line: 10 };
-    state.invert = true;
+    state.base = { angle: 45, line: 10, inverted: true };  // white-dominant field
+    state.invert = false;
     state.layers = [
       { id: nid(), name: 'Polygon (knock-out)', visible: true, rotate: 0,
         shape: { type: 'polygon', points: [[180, 230], [560, 230], [900, 760], [900, 1770], [520, 1770], [180, 1240]] },
         op: { type: 'fill', color: 'paper' } },
       { id: nid(), name: 'Circle (re-fill)', visible: true, rotate: 0,
         shape: { type: 'circle', cx: 560, cy: 1000, r: 300 },
-        op: { type: 'stripes', angle: 45, line: 0, inverted: false } },
+        op: { type: 'stripes', angle: 45, line: 0, inverted: true } },  // matches base → only shows over the knock-out
     ];
   } else if (name === 'disc') {
     state.doc = { w: 2000, h: 1400 };
@@ -400,4 +403,8 @@ function loadPreset(name) {
 }
 
 /* ---------- Boot ---------- */
-loadPreset('dome');
+if (typeof document !== 'undefined') {
+  loadPreset('dome');
+} else if (typeof module !== 'undefined') {
+  module.exports = { state, buildSVG, loadPreset };  // for headless rendering / tests
+}

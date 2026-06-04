@@ -133,7 +133,7 @@ function buildSVG(forExport) {
     const [cx, cy] = shapeCenter(L.shape);
     const tf = L.rotate ? `rotate(${L.rotate} ${cx} ${cy})` : '';
     const border = (L.border && L.op.type !== 'outline')
-      ? ` stroke="${ink()}" stroke-width="${state.base.line}" stroke-linejoin="round"` : '';
+      ? ` stroke="${ink()}" stroke-width="${state.base.line}" stroke-linejoin="miter"` : '';
     const meta = forExport ? '' : ` class="shape" data-id="${L.id}"`;
     body += shapeMarkup(L.shape, attrs + border + meta, tf);
   }

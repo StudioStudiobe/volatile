@@ -47,7 +47,7 @@ function defaultOp(type) {
 }
 
 function defaultLayer(type) {
-  return { id: nid(), name: cap(type), visible: true, rotate: 0,
+  return { id: nid(), name: cap(type), visible: true, rotate: 0, border: false,
            shape: makeShape(type), op: defaultOp('stripes') };
 }
 
@@ -105,7 +105,7 @@ function shapeMarkup(s, attrs, tf) {
 
 function layerAttrs(op, patterns) {
   if (op.type === 'fill') {
-    return `fill="${op.color === 'ink' ? ink() : paper()}" stroke="none"`;
+    return `fill="${op.color === 'ink' ? ink() : paper()}"`;
   }
   if (op.type === 'outline') {
     const dash = op.dashed ? ` stroke-dasharray="${op.width * 2.5} ${op.width * 2}"` : '';
@@ -115,7 +115,7 @@ function layerAttrs(op, patterns) {
   const line = op.line > 0 ? op.line : state.base.line;
   const key = patKey(op.angle, line, op.inverted);
   patterns.set(key, patDef(op.angle, line, op.inverted));
-  return `fill="url(#${key})" stroke="none"`;
+  return `fill="url(#${key})"`;
 }
 
 function buildSVG(forExport) {
@@ -132,8 +132,10 @@ function buildSVG(forExport) {
     const attrs = layerAttrs(L.op, patterns);
     const [cx, cy] = shapeCenter(L.shape);
     const tf = L.rotate ? `rotate(${L.rotate} ${cx} ${cy})` : '';
+    const border = (L.border && L.op.type !== 'outline')
+      ? ` stroke="${ink()}" stroke-width="${state.base.line}" stroke-linejoin="round"` : '';
     const meta = forExport ? '' : ` class="shape" data-id="${L.id}"`;
-    body += shapeMarkup(L.shape, attrs + meta, tf);
+    body += shapeMarkup(L.shape, attrs + border + meta, tf);
   }
 
   if (!forExport && state.selectedId) body += selectionOverlay();
@@ -276,6 +278,7 @@ function layerCard(L, i) {
       [['stripes', 'stripes'], ['fill', 'fill'], ['outline', 'outline']],
       (t) => { L.op = defaultOp(t); renderAll(); }),
     ...opFields(L),
+    checkField('Border (width = x)', !!L.border, (v) => { L.border = v; renderSVG(); }),
   );
 }
 
@@ -372,10 +375,10 @@ function loadPreset(name) {
     state.base = { angle: 0, line: 16 };
     state.invert = false;
     state.layers = [
-      { id: nid(), name: 'Triangle (vertical)', visible: true, rotate: 0,
+      { id: nid(), name: 'Triangle (vertical)', visible: true, rotate: 0, border: true,
         shape: { type: 'polygon', points: [[1075, 120], [1075, 900], [1900, 900]] },
         op: { type: 'stripes', angle: 90, line: 0, inverted: false } },
-      { id: nid(), name: 'Dome (knock-out)', visible: true, rotate: -44,
+      { id: nid(), name: 'Dome (knock-out)', visible: true, rotate: -44, border: true,
         shape: { type: 'sector', cx: 1500, cy: 430, r: 330, a0: 180, a1: 360 },
         op: { type: 'fill', color: 'paper' } },
     ];
@@ -384,7 +387,7 @@ function loadPreset(name) {
     state.base = { angle: 90, line: 14 };
     state.invert = false;
     state.layers = [560, 1000, 1440].map((cx, i) => ({
-      id: nid(), name: 'Capsule ' + (i + 1), visible: true, rotate: 0,
+      id: nid(), name: 'Capsule ' + (i + 1), visible: true, rotate: 0, border: true,
       shape: { type: 'rect', x: cx - 150, y: 170, w: 300, h: 1060, r: 150 },
       op: { type: 'stripes', angle: 0, line: 0, inverted: false },
     }));

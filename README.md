@@ -33,6 +33,9 @@ Every layer can be rotated.
 - **fill** — solid fill: `paper` (knock-out / negative space) or `ink` (solid black).
 - **outline** — stroke only, optionally **dashed** — for construction lines.
 
+Any layer can also carry a **border** — a stroke around the shape at the base line
+width `x` (so a white knock-out with a black outline gives the dome look).
+
 The stripe rule is locked: **black line = x, gap = x / 2** (so ⅔ ink coverage).
 A global **Invert** swaps black and white for the whole composition.
 

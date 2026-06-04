@@ -49,6 +49,13 @@ Four buttons reproduce the reference mechanisms to start from:
 ## Export
 **SVG** (vector, print-ready) and **PNG** (2×).
 
+## Live preview (GitHub Pages)
+
+A workflow at `.github/workflows/pages.yml` deploys the static site to GitHub
+Pages on every push. One-time setup (repo must be **public**, or owner on
+**GitHub Pro**): *Settings → Pages → Build and deployment → Source: GitHub
+Actions*. The site then publishes at `https://studiostudiobe.github.io/volatile/`.
+
 ## Roadmap / open questions
 - Density **gradient** as a first-class operation (the shaded sphere look).
 - True **boolean** regions (intersection / difference) if stacking isn't enough.

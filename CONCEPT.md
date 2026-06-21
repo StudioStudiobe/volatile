@@ -1,9 +1,12 @@
 # Volatile — concept
 
-Een werkprogramma, geen stijlgids. Hockney als referentie op meta-niveau:
-geërfd is zijn *methode* — een leven lang één beeldsysteem ondervragen tot de
-aannames ervan zichtbaar worden — niet zijn motieven. Geen enkele streep is van
-hem geleend.
+Een werkprogramma, geen stijlgids. Twee referenties, beide op meta-niveau:
+
+- **Hockney** levert de *inzet* — een leven lang één beeldsysteem ondervragen tot
+  de aannames ervan zichtbaar worden. Geërfd is zijn methode, niet zijn motieven.
+  Geen enkele streep is van hem geleend.
+- **LeWitt** levert de *motor en de vorm* — het idee is de machine die het werk
+  maakt; de instructie is het werk; het systeem put zijn eigen combinatoriek uit.
 
 ## Premisse
 
@@ -53,6 +56,40 @@ logica) en toon ze samen — niet om de "mooiste" te kiezen, maar om te bewijzen
 dat geen enkel regime "het echte" toont. Daarmee zegt het werk over zijn eigen
 streepsysteem precies wat Hockney over het perspectief zei: het is een keuze,
 geen natuur.
+
+## Het werk is de instructie (LeWitt)
+
+Volatile is geen tekentool maar een **instructie-engine**: een basisveld plus een
+gestapelde lagenset met operaties. Daaruit volgt wat een "werk" is:
+
+- Het echte artefact is niet de SVG, maar de **parameterset / het voorschrift.**
+  De SVG is één *realisatie*, zoals LeWitts uitgevoerde muur — de regel is het
+  origineel.
+- **Publiceer de instructie, niet alleen het beeld.** Een werk = de geschreven
+  regel + het diagram. Elke print is een instantie, zoals LeWitts certificaat.
+- **Site-uitvoering is legitiem.** Vectorlogica leeft net zo goed op een muur, op
+  schaal, door anderen uitgevoerd. Het werk is de instructie, niet het object —
+  dus de vraag "print of installatie" hoeft niet beslist te worden.
+
+De streep-oriëntaties zijn, bijna woordelijk, LeWitts "lijnen in vier richtingen".
+De blokken *Drempel* en *Contract* zijn daarmee combinatoriek: alle permutaties
+van oriëntatie/dichtheid systematisch aflopen in plaats van componeren op gevoel.
+
+## Open vork: hoeveel hand blijft erin?
+
+Het programma staat tussen twee polen, en die keuze is bewust nog niet gemaakt:
+
+- **LeWitt-pool** — verwijder het oog en de hand. Het systeem genereert zelf alle
+  varianten; het is onpersoonlijk en volledig. Het werk gaat over het *idee*.
+- **Hockney-pool** — het oog blijft sturen. De maker cureert welke instanties
+  "tellen". Het werk gaat over *hoe wij kijken*.
+
+De productieve positie ligt er tussenin: de machine draait onpersoonlijk (LeWitt)
+terwijl het onderwerp de arbitraire optiek van waarneming blijft (Hockney) — het
+systeem bewíjst dat het contract willekeurig is, en gaat daarom over kijken.
+
+*(Te beslissen: hoe ver de hand/smaak verwijderd wordt — vrij genereren versus
+cureren.)*
 
 ## Bodies of work
 

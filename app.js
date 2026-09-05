@@ -1159,11 +1159,12 @@ function gridLines() {
 function gridOverlay() {
   const { xs, ys, m } = gridLines();
   const { w, h } = state.doc;
-  const sw = Math.max(w, h) / 1500, c = '#3b82f6';
-  let g = `<g class="grid" pointer-events="none" stroke="${c}" stroke-width="${sw}" fill="none">`;
-  for (const x of xs) g += `<line x1="${x}" y1="${m}" x2="${x}" y2="${h - m}" opacity=".35"/>`;
-  for (const y of ys) g += `<line x1="${m}" y1="${y}" x2="${w - m}" y2="${y}" opacity=".35"/>`;
-  if (m > 0) g += `<rect x="${m}" y="${m}" width="${w - 2 * m}" height="${h - 2 * m}" opacity=".8"/>`;
+  const sw = Math.max(w, h) / 1200, c = '#ff3d9a';         // guide magenta, with a pale halo so it reads on black and white
+  const lines = xs.map((x) => `M${x} ${m}V${h - m}`).join('') + ys.map((y) => `M${m} ${y}H${w - m}`).join('');
+  let g = `<g class="grid" pointer-events="none" fill="none">`;
+  g += `<path d="${lines}" stroke="#ffffff" stroke-width="${sw * 3}" opacity=".45"/>`;
+  g += `<path d="${lines}" stroke="${c}" stroke-width="${sw}" opacity=".9"/>`;
+  if (m > 0) g += `<rect x="${m}" y="${m}" width="${w - 2 * m}" height="${h - 2 * m}" stroke="${c}" stroke-width="${sw * 2}" opacity=".9"/>`;
   return g + '</g>';
 }
 

@@ -176,7 +176,9 @@ backup, transfer or git) and **open** such a file. *New* starts from the default
 canvas.
 
 ## Export
-**SVG** (vector; print formats carry their size in mm) and **PNG** at the format's
+**SVG** (vector; print formats carry their size in mm), **PDF** (vector, exact
+mm page size, written by a small built-in writer: the stripes are real clipped
+paths, not patterns, so every RIP reads them) and **PNG** at the format's
 native size: 300 dpi for print (A4 = 2480 × 3508 px, A1 = 7016 × 9933 px),
 1080 px wide for Instagram, 2× for a custom canvas.
 

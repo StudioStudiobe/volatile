@@ -1604,7 +1604,9 @@ function exportSection() {
   return section('Export', [
     el('div', { class: 'addrow' },
       btn('Download SVG', exportSVG, 'exp'),
+      btn('Download PDF', exportPDF, 'exp'),
       btn('Download PNG', exportPNG, 'exp')),
+    el('p', { class: 'hint' }, 'PDF and SVG are vector at the exact print size; the PDF writes the stripes as paths (no patterns).'),
     anim.playing || anim.beats ? el('p', { class: 'hint' }, 'Exports the frame as it is now (pause to pick one).') : null,
   ]);
 }
@@ -1639,6 +1641,147 @@ function exportPNG() {
     c.toBlob((b) => download(b, exportName('png')));
   };
   img.src = url;
+}
+
+/* ============================================================
+   PDF export — a minimal, dependency-free vector PDF
+   The stripes are written as real paths (clipped rectangles), not as
+   patterns, so any RIP or print workflow reads them. Print formats get
+   their exact mm size; screen formats 1 px = 0.75 pt.
+   ============================================================ */
+const pn = (v) => String(Math.round(v * 1000) / 1000);
+const KAPPA = 0.5522847498;
+
+function pdfRect(x, y, w, h) { return `${pn(x)} ${pn(y)} ${pn(w)} ${pn(h)} re`; }
+
+/* path construction ops for a shape, in user units */
+function pdfPath(s) {
+  const L = (x, y) => `${pn(x)} ${pn(y)} l`;
+  const C = (a, b, c, d, e, f) => `${pn(a)} ${pn(b)} ${pn(c)} ${pn(d)} ${pn(e)} ${pn(f)} c`;
+  switch (s.type) {
+    case 'circle': case 'ellipse': {
+      const rx = s.type === 'circle' ? s.r : s.rx, ry = s.type === 'circle' ? s.r : s.ry;
+      const { cx, cy } = s, kx = KAPPA * rx, ky = KAPPA * ry;
+      return [`${pn(cx + rx)} ${pn(cy)} m`,
+        C(cx + rx, cy + ky, cx + kx, cy + ry, cx, cy + ry),
+        C(cx - kx, cy + ry, cx - rx, cy + ky, cx - rx, cy),
+        C(cx - rx, cy - ky, cx - kx, cy - ry, cx, cy - ry),
+        C(cx + kx, cy - ry, cx + rx, cy - ky, cx + rx, cy), 'h'].join('\n');
+    }
+    case 'rect': {
+      const { x, y, w, h } = s, r = Math.max(0, Math.min(s.r || 0, w / 2, h / 2));
+      if (!r) return pdfRect(x, y, w, h);
+      const k = KAPPA * r;
+      return [`${pn(x + r)} ${pn(y)} m`, L(x + w - r, y),
+        C(x + w - r + k, y, x + w, y + r - k, x + w, y + r), L(x + w, y + h - r),
+        C(x + w, y + h - r + k, x + w - r + k, y + h, x + w - r, y + h), L(x + r, y + h),
+        C(x + r - k, y + h, x, y + h - r + k, x, y + h - r), L(x, y + r),
+        C(x, y + r - k, x + r - k, y, x + r, y), 'h'].join('\n');
+    }
+    case 'polygon':
+      return s.points.map((p, i) => `${pn(p[0])} ${pn(p[1])} ${i ? 'l' : 'm'}`).join('\n') + '\nh';
+    case 'sector': {
+      const rad = (a) => a * Math.PI / 180;
+      let sweep = (((s.a1 - s.a0) % 360) + 360) % 360;
+      if (sweep === 0) sweep = 360;
+      const n = Math.ceil(sweep / 90), d = rad(sweep / n), kk = 4 / 3 * Math.tan(d / 4);
+      const P = (t) => [s.cx + s.r * Math.cos(t), s.cy + s.r * Math.sin(t)];
+      const D = (t) => [-s.r * Math.sin(t), s.r * Math.cos(t)];
+      let t = rad(s.a0);
+      const p0 = P(t);
+      const ops = [`${pn(s.cx)} ${pn(s.cy)} m`, L(p0[0], p0[1])];
+      for (let i = 0; i < n; i++) {
+        const a = P(t), da = D(t), b = P(t + d), db = D(t + d);
+        ops.push(C(a[0] + kk * da[0], a[1] + kk * da[1], b[0] - kk * db[0], b[1] - kk * db[1], b[0], b[1]));
+        t += d;
+      }
+      ops.push('h');
+      return ops.join('\n');
+    }
+  }
+}
+
+const pdfGray = (hex) => (hex === '#ffffff' ? '1' : '0');
+
+/* stripes covering bbox (in the current frame); caller has set the clip */
+function pdfStripes(bbox, angle, line, inv) {
+  const P = line * 1.5;
+  const lc = inv ? paper() : ink(), bg = inv ? ink() : paper();
+  const [bx, by, bw, bh] = bbox;
+  const ph = viewPhase ? (viewPhase % P) : 0;
+  const a = angle * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  // bbox corners into pattern space (inverse of rotate(angle) translate(0, ph))
+  const corners = [[bx, by], [bx + bw, by], [bx + bw, by + bh], [bx, by + bh]].map(([X, Y]) =>
+    [c * X + s * Y, -s * X + c * Y - ph]);
+  const xs = corners.map((p) => p[0]), ys = corners.map((p) => p[1]);
+  const x0 = Math.min(...xs) - P, x1 = Math.max(...xs) + P;
+  const k0 = Math.floor(Math.min(...ys) / P) - 1, k1 = Math.ceil(Math.max(...ys) / P) + 1;
+  let ops = `${pdfGray(bg)} g ${pdfRect(bx, by, bw, bh)} f\n`;
+  ops += `q ${pn(c)} ${pn(s)} ${pn(-s)} ${pn(c)} 0 0 cm 1 0 0 1 0 ${pn(ph)} cm ${pdfGray(lc)} g\n`;
+  for (let k = k0; k <= k1; k++) ops += `${pdfRect(x0, k * P, x1 - x0, line)} f\n`;
+  return ops + 'Q\n';
+}
+
+function buildPDF() {
+  const { w, h } = state.doc, f = currentFormat();
+  const sc = (f && f.mm) ? (72 / 25.4) / 10 : 0.75;       // units -> pt
+  const W = w * sc, H = h * sc;
+  buildSVG(true);                                          // sets the view globals for this frame
+  const view = animated();
+  const baseAngle = r1(view.angle % 360);
+  let c = `${pn(sc)} 0 0 ${pn(-sc)} 0 ${pn(H)} cm\n`;      // y down, like the design
+  c += `${pdfGray(paper())} g ${pdfRect(0, 0, w, h)} f\n`;
+  c += `q ${pdfRect(0, 0, w, h)} W n\n` + pdfStripes([0, 0, w, h], baseAngle, viewBaseLine, state.base.inverted) + 'Q\n';
+
+  for (const L of state.layers) {
+    if (!L.visible || !layerActive(L)) continue;
+    let shape = scaledShape(L.shape, view.layerScale(L));
+    const [ox, oy] = view.layerOffset(L);
+    if (ox || oy) { const m = clone(shape); translateShape(m, shape, ox, oy); shape = m; }
+    const [cx, cy] = shapeCenter(shape);
+    const rot = r1(view.layerRotate(L));
+    const path = pdfPath(shape);
+    c += 'q\n';
+    if (rot) {
+      const a = rot * Math.PI / 180, co = Math.cos(a), si = Math.sin(a);
+      c += `${pn(co)} ${pn(si)} ${pn(-si)} ${pn(co)} ${pn(cx - co * cx + si * cy)} ${pn(cy - si * cx - co * cy)} cm\n`;
+    }
+    const op = L.op, colr = L.color || 'ink';
+    if (op.type === 'fill') {
+      c += `${pdfGray(col(colr))} g\n${path}\nf\n`;
+    } else if (op.type === 'outline') {
+      c += `${pdfGray(col(colr))} G ${pn(op.width)} w\n${path}\nS\n`;
+    } else {
+      const line = op.line > 0 ? op.line : viewBaseLine;
+      const angle = r1((op.angle + viewAngleDelta) % 360);
+      c += `q\n${path}\nW n\n` + pdfStripes(shapeBBox(shape), angle, line, colr === 'paper') + 'Q\n';
+    }
+    if (L.border && op.type !== 'outline') {
+      c += `${pdfGray(col(L.borderColor || 'ink'))} G ${pn(viewBaseLine)} w 0 j\n${path}\nS\n`;
+    }
+    c += 'Q\n';
+  }
+
+  const title = (project.name || 'Linework').replace(/[()\\]/g, '');
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pn(W)} ${pn(H)}] /Contents 4 0 R /Resources << >> >>`,
+    `<< /Length ${c.length} >>\nstream\n${c}\nendstream`,
+    `<< /Title (${title}) /Producer (Linework) /CreationDate (D:${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}) >>`,
+  ];
+  let out = '%PDF-1.4\n%\xe2\xe3\xcf\xd3\n';
+  const offsets = [];
+  objs.forEach((o, i) => { offsets.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  offsets.forEach((o) => { out += String(o).padStart(10, '0') + ' 00000 n \n'; });
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info 5 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Uint8Array.from(out, (ch) => ch.charCodeAt(0) & 0xff);
+}
+
+function exportPDF() {
+  download(new Blob([buildPDF()], { type: 'application/pdf' }), exportName('pdf'));
 }
 
 function loadDefault() {                  // A4 portrait starting canvas (units: 0.1 mm)
@@ -1981,5 +2124,5 @@ if (typeof document !== 'undefined') {
   initTimeline();
   renderTimeline();
 } else if (typeof module !== 'undefined') {
-  module.exports = { state, anim, audio, seq, project, projectData, buildSVG, layerActive, timelineLength, gridLines, snapMoveDelta, snapPoint, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
+  module.exports = { state, anim, audio, seq, project, projectData, buildSVG, buildPDF, layerActive, timelineLength, gridLines, snapMoveDelta, snapPoint, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
 }

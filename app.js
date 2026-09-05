@@ -26,11 +26,22 @@ const state = {
   selectedId: null,
   // Animation is a non-destructive overlay on the design: values below are
   // rates per beat; the running clock lives in `anim` (not in history).
-  animation: { bpm: 120, scroll: 0, drift: 0, flipEvery: 0 },
+  animation: { bpm: 120, scroll: 0, drift: 0, flipEvery: 0, loopBeats: 8, audioGain: 1 },
+  scenes: [],                    // saved snapshots of design + motion, played in order
+  sequence: { loop: true },
 };
 
+const seq = { playing: false, index: -1 };   // sequence playback (runtime, not in history)
+
 const anim = { playing: false, beats: 0, last: 0, raf: 0 };
-const ui = { tab: 'static' };     // 'static' (design) | 'motion' (animation)
+const ui = { tab: 'static', layout: 'tabs' };     // tab: 'static' | 'motion' | 'sequence'; layout: 'tabs' | 'split'
+try { if (localStorage.getItem('linework.layout') === 'split') ui.layout = 'split'; } catch (e) { /* private mode etc. */ }
+
+function setLayout(l) {
+  ui.layout = l;
+  try { localStorage.setItem('linework.layout', l); } catch (e) { /* ignore */ }
+  renderControls();
+}
 
 /* Animated view of the design at the current clock (pure: no state mutation) */
 function animated() {
@@ -46,6 +57,10 @@ function animated() {
     layerScale: (L) => {
       const lo = L.sizeMin ?? 100, hi = L.sizeMax ?? 100;
       if (lo === hi) return lo / 100;
+      if (L.drive && L.drive !== 'clock') {                 // sound level drives the size
+        const lv = audio.kind === 'off' ? 0 : audio.levels[L.drive] || 0;
+        return (lo + (hi - lo) * lv) / 100;
+      }
       const period = L.sizePeriod || 1, off = L.sizeOffset || 0;
       const u = (((b - off) / period) % 1 + 1) % 1;          // 0..1 within the cycle
       let f;                                                  // 1 = large, 0 = small
@@ -239,7 +254,7 @@ let undoStack = [], redoStack = [], stable = null, dirtyTimer = null;
 function serialize() {
   return JSON.stringify({ doc: state.doc, base: state.base, invert: state.invert,
                           layers: state.layers, reformatMode: state.reformatMode,
-                          animation: state.animation });
+                          animation: state.animation, scenes: state.scenes, sequence: state.sequence });
 }
 
 function flushHistory() {
@@ -291,10 +306,16 @@ function updateHistoryButtons() {
 }
 
 function historyRow() {
-  return el('div', { class: 'addrow hist' },
-    el('button', { type: 'button', id: 'undo', class: 'mini', onclick: undo }, '↶ Undo'),
-    el('button', { type: 'button', id: 'redo', class: 'mini', onclick: redo }, '↷ Redo'),
-    el('span', { class: 'hint' }, '⌘/Ctrl+Z · ⇧⌘Z · Delete removes the selected layer'));
+  return el('div', { class: 'hist' },
+    el('button', { type: 'button', id: 'undo', class: 'mini', title: '⌘/Ctrl+Z', onclick: undo }, '↶ Undo'),
+    el('button', { type: 'button', id: 'redo', class: 'mini', title: '⇧⌘Z / Ctrl+Y', onclick: redo }, '↷ Redo'));
+}
+
+function layoutToggle() {
+  const split = ui.layout === 'split';
+  return el('button', { type: 'button', class: 'mini', title: 'Show the three panels as tabs or side by side',
+                        onclick: () => setLayout(split ? 'tabs' : 'split') },
+            split ? '⊟ Tabs' : '⊞ Side by side');
 }
 
 function onKey(e) {
@@ -465,11 +486,16 @@ function motionCard(L) {
     numField('Spin (°/beat)', L.spin || 0, -90, 90, 0.5, (v) => { L.spin = v; renderSVG(); }),
     numField('Small (% of size)', L.sizeMin ?? 100, 0, 300, 1, (v) => { L.sizeMin = v; renderSVG(); }),
     numField('Large (% of size)', L.sizeMax ?? 100, 0, 300, 1, (v) => { L.sizeMax = v; renderSVG(); }),
-    numField('Period (beats)', L.sizePeriod || 1, 0.25, 16, 0.25, (v) => { L.sizePeriod = v; renderSVG(); }),
-    numField('Offset (beats)', L.sizeOffset || 0, 0, 16, 0.25, (v) => { L.sizeOffset = v; renderSVG(); }),
-    selectField('Motion', L.sizeMode || 'smooth',
-      [['smooth', 'smooth (ease between)'], ['snap', 'snap (hard switch)'], ['punch', 'punch (large on beat, ease back)']],
-      (v) => { L.sizeMode = v; renderSVG(); }),
+    selectField('Drive', L.drive || 'clock',
+      [['clock', 'clock (beats)'], ['low', 'sound: low (bass)'], ['mid', 'sound: mid'], ['high', 'sound: high'], ['all', 'sound: all']],
+      (v) => { L.drive = v; renderAll(); }),
+    ...((L.drive || 'clock') === 'clock' ? [
+      numField('Period (beats)', L.sizePeriod || 1, 0.25, 16, 0.25, (v) => { L.sizePeriod = v; renderSVG(); }),
+      numField('Offset (beats)', L.sizeOffset || 0, 0, 16, 0.25, (v) => { L.sizeOffset = v; renderSVG(); }),
+      selectField('Motion', L.sizeMode || 'smooth',
+        [['smooth', 'smooth (ease between)'], ['snap', 'snap (hard switch)'], ['punch', 'punch (large on beat, ease back)']],
+        (v) => { L.sizeMode = v; renderSVG(); }),
+    ] : [el('p', { class: 'hint' }, 'Size follows the sound level of that band: quiet = Small, loud = Large. Set Gain in the Audio section.')]),
   );
 }
 
@@ -479,14 +505,16 @@ function motionCard(L) {
 /* Print formats live in 0.1 mm units (A4 = 2100 x 2970), screen formats in px.
    Portrait dimensions are stored; landscape swaps them. */
 const FORMATS = [
-  { id: 'A5', label: 'A5', mm: [148, 210] },
-  { id: 'A4', label: 'A4', mm: [210, 297] },
-  { id: 'A3', label: 'A3', mm: [297, 420] },
-  { id: 'A2', label: 'A2', mm: [420, 594] },
-  { id: 'A1', label: 'A1', mm: [594, 841] },
-  { id: 'ig-post', label: 'IG post 1:1', px: [1080, 1080] },
-  { id: 'ig-post-45', label: 'IG post 4:5', px: [1080, 1350] },
-  { id: 'ig-reel', label: 'IG reel 9:16', px: [1080, 1920] },
+  { id: 'A5', label: 'A5', mm: [148, 210], group: 'Print' },
+  { id: 'A4', label: 'A4', mm: [210, 297], group: 'Print' },
+  { id: 'A3', label: 'A3', mm: [297, 420], group: 'Print' },
+  { id: 'A2', label: 'A2', mm: [420, 594], group: 'Print' },
+  { id: 'A1', label: 'A1', mm: [594, 841], group: 'Print' },
+  { id: 'ig-post', label: 'IG post 1:1', px: [1080, 1080], group: 'Social' },
+  { id: 'ig-post-45', label: 'IG post 4:5', px: [1080, 1350], group: 'Social' },
+  { id: 'ig-reel', label: 'IG reel 9:16', px: [1080, 1920], group: 'Social' },
+  { id: 'hd', label: 'Screen HD 16:9', px: [1080, 1920], group: 'Screen', wide: true },
+  { id: 'uhd', label: 'Screen 4K 16:9', px: [2160, 3840], group: 'Screen', wide: true },
 ];
 const PRINT_DPI = 300;
 
@@ -572,9 +600,13 @@ function exportName(ext) {
 
 /* ---------- Document / format controls ---------- */
 function formatRow() {
-  return el('div', { class: 'addrow fmt' },
-    ...FORMATS.map((f) => btn(f.label, () => setFormat(f.id, state.doc.landscape),
-      'sz' + (f.id === state.doc.format ? ' active' : ''))));
+  const groups = [...new Set(FORMATS.map((f) => f.group))];
+  return el('div', {}, ...groups.map((g) => el('div', {},
+    el('div', { class: 'grp' }, g),
+    el('div', { class: 'addrow fmt' },
+      ...FORMATS.filter((f) => f.group === g).map((f) =>
+        btn(f.label, () => setFormat(f.id, f.wide ? true : state.doc.landscape),   // screens default to landscape
+            'sz' + (f.id === state.doc.format ? ' active' : '')))))));
 }
 
 
@@ -587,41 +619,64 @@ function lineInfo() {
   return ` Line x = ${r1(state.base.line / 10)} mm, gap ${r1(state.base.line / 20)} mm.`;
 }
 
+const TABS = [['static', 'Static'], ['motion', 'Motion'], ['sequence', 'Sequence']];
+
 function renderControls() {
   if (typeof document === 'undefined') return;
-  const p = document.getElementById('panel');
-  p.innerHTML = '';
-  p.append(historyRow());
-  p.append(tabRow());
+  const host = document.getElementById('panels');
+  host.innerHTML = '';
+  host.className = 'panels ' + ui.layout;
+  document.getElementById('tools').replaceChildren(historyRow(), layoutToggle());
 
-  if (ui.tab === 'motion') {
+  const tabs = ui.layout === 'split' ? TABS.map((t) => t[0]) : [ui.tab];
+  for (const t of tabs) {
+    const p = el('aside', { class: 'panel' });
+    if (ui.layout === 'split') p.append(el('h2', { class: 'ptitle' }, TABS.find((x) => x[0] === t)[1]));
+    else p.append(tabRow());
+    fillPanel(p, t);
+    host.append(p);
+  }
+  updateHistoryButtons();
+}
+
+function formatSection(withCustom) {
+  const custom = (k) => (v) => { state.doc[k] = v; state.doc.format = null; renderSVG(); refreshDocInfo(); };
+  return section(withCustom ? 'Document' : 'Format', [
+    formatRow(),
+    checkField('Landscape', state.doc.landscape, (v) => {
+      if (state.doc.format) setFormat(state.doc.format, v);
+      else { reformat(state.doc.h, state.doc.w); state.doc.landscape = v; renderAll(); }
+    }),
+    withCustom ? selectField('On format change', state.reformatMode,
+      [['fit', 'fit (keep all, field extends)'], ['fill', 'fill (cover, crop edges)']],
+      (v) => { state.reformatMode = v; }) : null,
+    el('p', { class: 'hint docinfo' }, docInfo()),
+    withCustom ? el('p', { class: 'hint' }, 'Formats rescale the whole composition (incl. line width). Width / height below only resize the canvas (custom format).') : null,
+    withCustom ? numField('Width', state.doc.w, 100, 10000, 10, custom('w')) : null,
+    withCustom ? numField('Height', state.doc.h, 100, 10000, 10, custom('h')) : null,
+    withCustom ? checkField('Invert whole image', state.invert, (v) => { state.invert = v; renderSVG(); }) : null,
+  ]);
+}
+
+function fillPanel(p, tab) {
+  if (tab === 'sequence') { sequenceTab(p); return; }
+
+  if (tab === 'motion') {
+    p.append(formatSection(false));
     p.append(animationSection());
+    p.append(audioSection());
     const wrap = el('div', {});
     state.layers.forEach((L) => wrap.append(motionCard(L)));
     p.append(section('Layers', [
       el('p', { class: 'hint' }, 'Per layer: spin and a Small / Large size the shape moves between. Shapes and colours are set in the Static tab.'),
       wrap,
     ]));
-    p.append(exportSection());
+    p.append(recordRow());
+    p.append(exportSection(true));
     return;
   }
 
-  const custom = (k) => (v) => { state.doc[k] = v; state.doc.format = null; renderSVG(); refreshDocInfo(); };
-  p.append(section('Document', [
-    formatRow(),
-    checkField('Landscape', state.doc.landscape, (v) => {
-      if (state.doc.format) setFormat(state.doc.format, v);
-      else { reformat(state.doc.h, state.doc.w); state.doc.landscape = v; renderAll(); }
-    }),
-    selectField('On format change', state.reformatMode,
-      [['fit', 'fit (keep all, field extends)'], ['fill', 'fill (cover, crop edges)']],
-      (v) => { state.reformatMode = v; }),
-    el('p', { class: 'hint', id: 'docinfo' }, docInfo()),
-    el('p', { class: 'hint' }, 'Formats rescale the whole composition (incl. line width). Width / height below only resize the canvas (custom format).'),
-    numField('Width', state.doc.w, 100, 10000, 10, custom('w')),
-    numField('Height', state.doc.h, 100, 10000, 10, custom('h')),
-    checkField('Invert whole image', state.invert, (v) => { state.invert = v; renderSVG(); }),
-  ]));
+  p.append(formatSection(true));
 
   p.append(section('Base field', [
     numField('Angle°', state.base.angle, 0, 180, 1, (v) => { state.base.angle = v; renderSVG(); }),
@@ -634,21 +689,221 @@ function renderControls() {
   const wrap = el('div', {});
   state.layers.forEach((L, i) => wrap.append(layerCard(L, i)));
   p.append(section('Layers', [
-    el('p', { class: 'hint' }, 'Drag a shape to move it; drag a corner square to resize (opposite corner stays). Alt: from centre · Shift: keep proportions.'),
+    el('p', { class: 'hint' }, 'Drag a shape to move it; drag a corner square to resize (opposite corner stays). Alt: from centre · Shift: keep proportions. Delete removes the selected layer.'),
     wrap,
     el('div', { class: 'addrow' },
       ...SHAPES.map((t) => btn('+ ' + t, () => { const L = defaultLayer(t); state.layers.push(L); state.selectedId = L.id; renderAll(); }, 'add'))),
   ]));
 
-  p.append(exportSection());
+  p.append(exportSection(false));
 }
 
 function refreshDocInfo() {
-  const d = document.getElementById('docinfo');
-  if (d) d.textContent = docInfo();
+  document.querySelectorAll('.docinfo').forEach((d) => { d.textContent = docInfo(); });
 }
 
 function renderAll() { renderControls(); renderSVG(); updateHistoryButtons(); }
+
+/* ============================================================
+   Scenes & sequence
+   A scene is a snapshot of the whole design + motion settings, with a
+   length in beats. The sequence plays scenes in order (hard cuts).
+   ============================================================ */
+const SCENE_KEYS = ['doc', 'base', 'invert', 'layers', 'animation'];
+
+function sceneSnapshot() {
+  const s = {};
+  SCENE_KEYS.forEach((k) => { s[k] = clone(state[k]); });
+  return s;
+}
+
+function addScene() {
+  const n = state.scenes.length + 1;
+  state.scenes.push({ id: nid(), name: 'Scene ' + n, beats: 8, snap: sceneSnapshot() });
+  renderAll();
+}
+
+function updateScene(i) {
+  state.scenes[i].snap = sceneSnapshot();
+  renderAll();
+}
+
+/* Load a scene into the editor. During playback the load is "silent":
+   it is not an undo step (the design jumps back and forth by design). */
+function loadScene(i, silent) {
+  const sc = state.scenes[i];
+  if (!sc) return;
+  Object.assign(state, clone(sc.snap));
+  state.selectedId = null;
+  anim.beats = 0;
+  seq.index = i;
+  renderAll();
+  if (silent) { flushHistory(); undoStack.pop(); stable = serialize(); updateHistoryButtons(); }
+}
+
+function sequenceBeats() { return state.scenes.reduce((t, s) => t + (s.beats || 0), 0); }
+
+function playSequence() {
+  if (!state.scenes.length) return;
+  seq.playing = true;
+  loadScene(0, true);
+  play();
+}
+
+function stopSequence() {
+  seq.playing = false;
+  renderControls();
+}
+
+/* Called every frame while the clock runs. Returns 'end' when the last
+   scene finished (the caller decides: loop, stop, or end the recording). */
+function advanceSequence() {
+  if (!seq.playing) return 'hold';
+  const sc = state.scenes[seq.index];
+  if (!sc || anim.beats < sc.beats) return 'hold';
+  const next = seq.index + 1;
+  if (next >= state.scenes.length) return 'end';
+  loadScene(next, true);
+  return 'next';
+}
+
+function sceneCard(sc, i) {
+  const active = seq.playing && seq.index === i;
+  return el('div', { class: 'layer' + (active ? ' active' : '') },
+    el('div', { class: 'lhead' },
+      el('input', { type: 'text', class: 'lname', value: sc.name, oninput: (e) => { sc.name = e.target.value; markDirty(); } }),
+      btn('▲', () => { if (i > 0) { [state.scenes[i - 1], state.scenes[i]] = [state.scenes[i], state.scenes[i - 1]]; renderAll(); } }, 'mini'),
+      btn('▼', () => { if (i < state.scenes.length - 1) { [state.scenes[i + 1], state.scenes[i]] = [state.scenes[i], state.scenes[i + 1]]; renderAll(); } }, 'mini'),
+      btn('✕', () => { state.scenes.splice(i, 1); if (seq.index >= state.scenes.length) seq.index = -1; renderAll(); }, 'mini danger')),
+    numField('Length (beats)', sc.beats, 1, 256, 1, (v) => { sc.beats = v; markDirty(); }),
+    el('div', { class: 'addrow' },
+      btn('Load into editor', () => { seq.playing = false; loadScene(i); }),
+      btn('Update from editor', () => updateScene(i))),
+    el('p', { class: 'hint' }, `${sc.snap.layers.length} layer${sc.snap.layers.length === 1 ? '' : 's'} · ${sc.snap.doc.w} × ${sc.snap.doc.h} · ${sc.snap.animation.bpm} bpm`));
+}
+
+function sequenceTab(p) {
+  const total = sequenceBeats();
+  const wrap = el('div', {});
+  state.scenes.forEach((sc, i) => wrap.append(sceneCard(sc, i)));
+  p.append(section('Scenes', [
+    el('p', { class: 'hint' }, 'A scene is the whole design plus its motion, frozen as it is now. Build it in Static and Motion, then add it here. Scenes play in order with hard cuts.'),
+    wrap,
+    el('div', { class: 'addrow' }, btn('+ Add scene from editor', addScene, 'add')),
+  ]));
+  p.append(section('Playback', [
+    el('div', { class: 'addrow' },
+      el('button', { type: 'button', id: 'seqplay', onclick: () => (seq.playing ? (stopSequence(), pause()) : playSequence()) },
+         seq.playing ? '■ Stop sequence' : '▶ Play sequence'),
+      btn('⛶ Fullscreen', toggleFullscreen)),
+    checkField('Loop', state.sequence.loop, (v) => { state.sequence.loop = v; markDirty(); }),
+    el('p', { class: 'hint' }, `Total length: ${total} beats` + (state.scenes.length ? ` (${(total * 60 / (state.animation.bpm || 120)).toFixed(1)} s at the editor's BPM)` : '')),
+  ]));
+  p.append(section('Record', [
+    el('div', { class: 'addrow' },
+      el('button', { type: 'button', class: 'recbtn', disabled: rec.busy ? 'true' : null,
+                     onclick: () => recordLoop(total, true) }, rec.busy ? '● Recording…' : '● Record sequence')),
+    el('p', { class: 'hint' }, 'Records all scenes once, in real time, with sound if a source is active.'),
+  ]));
+}
+
+/* ============================================================
+   Audio — sound-driven motion
+   Source: microphone / line-in, or an audio file. Three band levels
+   (low / mid / high, 0..1) are measured every frame; a layer can let a
+   band drive its size instead of the clock.
+   ============================================================ */
+const audio = { ctx: null, analyser: null, src: null, stream: null, el: null,
+                kind: 'off', data: null, levels: { low: 0, mid: 0, high: 0, all: 0 } };
+const BANDS = { low: [20, 160], mid: [160, 2000], high: [2000, 12000], all: [20, 12000] };
+
+async function setAudioSource(kind, file) {
+  stopAudio();
+  if (kind === 'off') { renderControls(); return; }
+  try {
+    audio.ctx = audio.ctx || new (window.AudioContext || window.webkitAudioContext)();
+    await audio.ctx.resume();
+    const an = audio.ctx.createAnalyser();
+    an.fftSize = 2048;
+    an.smoothingTimeConstant = 0.5;
+    audio.analyser = an;
+    audio.data = new Uint8Array(an.frequencyBinCount);
+    if (kind === 'mic') {
+      audio.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      audio.src = audio.ctx.createMediaStreamSource(audio.stream);
+      audio.src.connect(an);                          // analyse only: no monitoring (feedback)
+    } else {
+      if (!file) return;
+      audio.el = new Audio(URL.createObjectURL(file));
+      audio.el.loop = true;
+      audio.src = audio.ctx.createMediaElementSource(audio.el);
+      audio.src.connect(an);
+      an.connect(audio.ctx.destination);
+      await audio.el.play();
+    }
+    audio.kind = kind;
+    if (!anim.playing) play();                        // frames are needed to see the sound
+  } catch (err) {
+    alert('Audio source failed: ' + err.message);
+    stopAudio();
+  }
+  renderControls();
+}
+
+function stopAudio() {
+  if (audio.stream) audio.stream.getTracks().forEach((t) => t.stop());
+  if (audio.el) { audio.el.pause(); URL.revokeObjectURL(audio.el.src); }
+  if (audio.src) audio.src.disconnect();
+  if (audio.analyser) audio.analyser.disconnect();
+  audio.stream = audio.el = audio.src = audio.analyser = null;
+  audio.kind = 'off';
+  audio.levels = { low: 0, mid: 0, high: 0, all: 0 };
+}
+
+function analyseAudio() {
+  const an = audio.analyser;
+  if (!an) return;
+  an.getByteFrequencyData(audio.data);
+  const hz = audio.ctx.sampleRate / an.fftSize;
+  const gain = state.animation.audioGain || 1;
+  for (const b in BANDS) {
+    const [f0, f1] = BANDS[b];
+    const i0 = Math.max(0, Math.floor(f0 / hz)), i1 = Math.min(audio.data.length - 1, Math.ceil(f1 / hz));
+    let sum = 0;
+    for (let i = i0; i <= i1; i++) sum += audio.data[i];
+    const raw = Math.min(1, (sum / (i1 - i0 + 1) / 255) * gain);
+    const prev = audio.levels[b];
+    audio.levels[b] = raw > prev ? raw : prev * 0.82 + raw * 0.18;   // fast attack, slower release
+  }
+  updateMeters();
+}
+
+function updateMeters() {
+  for (const b in BANDS) {
+    const m = document.getElementById('meter-' + b);
+    if (m) m.style.width = (audio.levels[b] * 100).toFixed(1) + '%';
+  }
+}
+
+function audioSection() {
+  const a = state.animation;
+  const fileInput = el('input', { type: 'file', accept: 'audio/*',
+    onchange: (e) => { const f = e.target.files[0]; if (f) setAudioSource('file', f); } });
+  const meters = el('div', { class: 'meters' }, ...['low', 'mid', 'high'].map((b) =>
+    el('div', { class: 'meter' }, el('span', { class: 'mlbl' }, b),
+       el('div', { class: 'mbar' }, el('div', { class: 'mfill', id: 'meter-' + b })))));
+  return section('Audio', [
+    selectField('Source', audio.kind,
+      [['off', 'off (clock only)'], ['mic', 'microphone / line-in'], ['file', 'audio file']],
+      (v) => { if (v === 'file') fileInput.click(); else setAudioSource(v); }),
+    audio.kind === 'file' && audio.el ? el('p', { class: 'hint' }, 'Playing file (loops). Choose "audio file" again to load another.') : null,
+    el('div', { hidden: true }, fileInput),
+    numField('Gain', a.audioGain || 1, 0.2, 8, 0.1, (v) => { a.audioGain = v; markDirty(); }),
+    meters,
+    el('p', { class: 'hint' }, 'Per layer, set Drive to a band: its size then follows the sound level between Small and Large instead of the clock. With a file source, recordings include the audio.'),
+  ]);
+}
 
 /* ============================================================
    Animation — first sketch
@@ -661,6 +916,11 @@ function tick(now) {
   const dt = (now - anim.last) / 1000;
   anim.last = now;
   anim.beats += dt * state.animation.bpm / 60;
+  if (audio.kind !== 'off') analyseAudio();
+  if (advanceSequence() === 'end') {
+    if (state.sequence.loop) loadScene(0, true);
+    else { stopSequence(); pause(); paint(); return; }
+  }
   paint();
   anim.raf = requestAnimationFrame(tick);
 }
@@ -680,6 +940,101 @@ function pause() {
 }
 
 function resetClock() { anim.beats = 0; paint(); }
+
+/* ---------- Record a loop (WebM) ----------
+   Real-time capture of a canvas fed with the SVG frames, via MediaRecorder.
+   Length in beats; pick a multiple of every period for a seamless loop. */
+const rec = { busy: false };
+
+function recordPixels() {                      // screen formats native, others capped to 1920 on the long side
+  const f = currentFormat(), { w, h } = state.doc;
+  if (f && f.px) return [w, h];
+  const k = Math.min(1, 1920 / Math.max(w, h));
+  return [Math.round(w * k / 2) * 2, Math.round(h * k / 2) * 2];
+}
+
+function recordLoop(beats, sequence) {
+  if (rec.busy || typeof MediaRecorder === 'undefined') return;
+  if (sequence && !state.scenes.length) return;
+  const mime = ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm', 'video/mp4'].find((m) => MediaRecorder.isTypeSupported(m));
+  if (!mime) { alert('This browser cannot record video (MediaRecorder unsupported).'); return; }
+  const [W, H] = recordPixels();
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  const stream = c.captureStream(0);              // we push frames explicitly after each draw
+  const track = stream.getVideoTracks()[0];
+  if (audio.kind !== 'off' && audio.src) {                   // mix the sound into the recording
+    const dest = audio.ctx.createMediaStreamDestination();
+    audio.src.connect(dest);
+    dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
+    if (audio.el) { audio.el.currentTime = 0; }                // file starts with the recording
+  }
+  const mr = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16e6 });
+  const chunks = [];
+  mr.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  mr.onstop = () => {
+    download(new Blob(chunks, { type: mime }), exportName(mime.includes('mp4') ? 'mp4' : 'webm'));
+    rec.busy = false;
+    anim.beats = 0;
+    if (wasPlaying) play(); else paint();
+    renderControls();
+  };
+
+  const wasPlaying = anim.playing;
+  pause();
+  rec.busy = true;
+  if (sequence) { seq.playing = true; loadScene(0, true); } else anim.beats = 0;
+  syncRecordButton();
+  const total = beats;
+  let last = performance.now(), done = 0, stopped = false;
+
+  const frame = () => {
+    if (stopped) return;
+    const now = performance.now(), dt = (now - last) / 1000;
+    last = now;
+    const db = dt * state.animation.bpm / 60;       // beats this frame (BPM may differ per scene)
+    anim.beats += db;
+    done += db;
+    const ended = sequence ? advanceSequence() === 'end' : done >= total;
+    if (ended) { stopped = true; if (sequence) seq.playing = false; setTimeout(() => mr.stop(), 300); return; }   // let the encoder flush
+    if (audio.kind !== 'off') analyseAudio();
+    const svg = buildSVG(true);
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, W, H);
+      if (track.requestFrame) track.requestFrame();
+      rec.frames++;
+      paint();                                       // keep the stage in sync
+      requestAnimationFrame(frame);
+    };
+    img.onerror = () => requestAnimationFrame(frame);
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  };
+  rec.frames = 0;
+  mr.start(500);
+  frame();
+}
+
+function syncRecordButton() {
+  document.querySelectorAll('.recbtn').forEach((b) => {
+    b.disabled = rec.busy;
+    if (rec.busy) b.textContent = '● Recording…';
+  });
+}
+
+function recordRow() {
+  const a = state.animation;
+  const [W, H] = recordPixels();
+  return section('Record', [
+    el('div', { class: 'row' },
+      el('button', { type: 'button', class: 'recbtn', disabled: rec.busy ? 'true' : null,
+                     onclick: () => recordLoop(a.loopBeats || 8) }, rec.busy ? '● Recording…' : '● Record loop'),
+      numField('Length (beats)', a.loopBeats || 8, 1, 128, 1, (v) => { a.loopBeats = v; markDirty(); })),
+    el('p', { class: 'hint' }, `Records ${W} × ${H} px in real time at the current BPM, as WebM (Chrome / Firefox; Safari gives MP4). `
+      + 'For a seamless loop, make the length a multiple of every period. Frame rate depends on the machine: HD is fine on a laptop with a GPU, 4K may drop frames.'),
+  ]);
+}
 
 function syncPlayButton() {
   const b = document.getElementById('play');
@@ -713,15 +1068,15 @@ function tabRow() {
     type: 'button', class: 'tab' + (ui.tab === id ? ' active' : ''),
     onclick: () => { ui.tab = id; renderControls(); },
   }, label);
-  return el('div', { class: 'tabs' }, tab('static', 'Static'), tab('motion', 'Motion'));
+  return el('div', { class: 'tabs' }, tab('static', 'Static'), tab('motion', 'Motion'), tab('sequence', 'Sequence'));
 }
 
-function exportSection() {
+function exportSection(frame) {
   return section('Export', [
     el('div', { class: 'addrow' },
       btn('Download SVG', exportSVG, 'exp'),
       btn('Download PNG', exportPNG, 'exp')),
-    ui.tab === 'motion' ? el('p', { class: 'hint' }, 'Exports the frame as it is now (pause to pick one).') : null,
+    frame ? el('p', { class: 'hint' }, 'Exports the frame as it is now (pause to pick one).') : null,
   ]);
 }
 
@@ -761,7 +1116,9 @@ function loadDefault() {                  // A4 portrait starting canvas (units:
   state.doc = { w: 2100, h: 2970, format: 'A4', landscape: false };
   state.base = { angle: 0, line: 24, inverted: false };   // 2.4 mm line, 1.2 mm gap
   state.invert = false;
-  state.animation = { bpm: 120, scroll: 0, drift: 0, flipEvery: 0 };
+  state.animation = { bpm: 120, scroll: 0, drift: 0, flipEvery: 0, loopBeats: 8, audioGain: 1 };
+  state.scenes = [];
+  state.sequence = { loop: true };
   anim.beats = 0;
   state.layers = [
     { id: nid(), name: 'Circle', visible: true, rotate: 0, spin: 0,
@@ -980,5 +1337,5 @@ if (typeof document !== 'undefined') {
   flushHistory();      // seed the stable snapshot; nothing to undo yet
   initCanvas();
 } else if (typeof module !== 'undefined') {
-  module.exports = { state, anim, buildSVG, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
+  module.exports = { state, anim, audio, seq, buildSVG, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
 }

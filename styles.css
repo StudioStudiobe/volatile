@@ -35,7 +35,8 @@ main {
   height: calc(100vh - 43px);
 }
 
-/* ---------- Panel ---------- */
+/* ---------- Panels ---------- */
+.panels { display: flex; flex: 0 0 auto; max-width: 75vw; overflow-x: auto; }
 .panel {
   width: 360px;
   flex: 0 0 360px;
@@ -44,6 +45,13 @@ main {
   border-right: 1px solid var(--line);
   padding: 6px 12px 40px;
 }
+.panels.split .panel { width: 300px; flex-basis: 300px; }
+.ptitle {
+  margin: 6px 0 4px; padding: 8px 0; border-bottom: 1px solid var(--line);
+  font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--txt);
+}
+.topbar .tools { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.topbar .hist { display: flex; gap: 4px; margin-right: 8px; }
 
 .sec { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .sec h2 {
@@ -92,8 +100,8 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
   margin: 8px 0;
 }
 .lhead { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
-.lname { flex: 1; font-weight: 600; }
-.layer .sub { margin: 10px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--txt-dim); }
+.lname { flex: 1 1 auto; min-width: 0; font-weight: 600; }
+.grp { margin: 10px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--txt-dim); }
 
 button {
   background: var(--panel-2);
@@ -147,9 +155,6 @@ button.exp { background: #2a2f36; }
 button.sz.active { border-color: var(--accent); color: var(--accent); }
 button:disabled { opacity: .4; cursor: default; }
 button:disabled:hover { border-color: var(--line); }
-.addrow.hist { align-items: center; margin: 8px 0 2px; }
-.addrow.hist button { flex: 0 0 auto; }
-.addrow.hist .hint { flex: 1; margin: 0; }
 
 /* ---------- Fullscreen stage (beamer / LED) ---------- */
 .stage:fullscreen { background: #000; padding: 0; }
@@ -165,3 +170,13 @@ button:disabled:hover { border-color: var(--line); }
 .tabs .tab:hover { color: var(--txt); }
 .tabs .tab.active { color: var(--txt); border-bottom-color: var(--accent); }
 .layer .lhead .hint { margin: 0; }
+.row .recbtn { flex: 0 0 auto; }
+.row .row { margin: 0; flex: 1; }
+.row .row .lbl { flex: 0 0 auto; }
+
+/* ---------- Audio meters ---------- */
+.meters { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.meter { display: flex; align-items: center; gap: 8px; }
+.mlbl { flex: 0 0 40px; color: var(--txt-dim); font-size: 11px; }
+.mbar { flex: 1; height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+.mfill { height: 100%; width: 0; background: var(--accent); transition: width 40ms linear; }

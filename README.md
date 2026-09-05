@@ -50,15 +50,17 @@ A global **Invert** swaps black and white for the whole composition.
 
 ## Formats
 
-The document has a **format**: `A5` `A4` `A3` `A2` `A1` (portrait or landscape) or
-`IG post 1:1` `IG post 4:5` `IG reel 9:16`. Switching format keeps the
+The document has a **format**: print `A5` `A4` `A3` `A2` `A1` (portrait or
+landscape), social `IG post 1:1` `IG post 4:5` `IG reel 9:16`, or screen
+`HD 16:9` (1920 × 1080) and `4K 16:9` (3840 × 2160); screens default to landscape,
+untick Landscape for a vertical screen. Switching format keeps the
 composition: every layer *and the line width x* are scaled uniformly from the
 centre of the canvas, so an A4 design re-issued as A1 is the same image,
 enlarged.
 
 - Print formats work in **0.1 mm units** (A4 = 2100 × 2970). The panel shows the
   physical line width, and the SVG export carries real `mm` dimensions.
-- Screen formats work in **px** (Instagram: 1080 wide).
+- Social and screen formats work in **px** (Instagram 1080 wide, HD 1920, 4K 3840).
 - When the aspect ratio changes (A4 → 1:1, → 9:16) choose **fit** (everything
   stays visible, the stripe field extends into the new space) or **fill** (the
   composition covers the canvas and the edges crop).
@@ -79,12 +81,31 @@ hold **Alt / Option** to scale from the centre and **Shift** to keep proportions
 numeric fields sync when you release. Selection handles never appear in the
 exported SVG.
 
-## Two tabs: Static and Motion
+## Three panels: Static, Motion, Sequence
 
-The panel has two tabs. **Static** is the design: document, base field, layers
-(shape, operation, colour, border) and export. **Motion** is the animation: the
-clock and, per layer, only its motion settings. Selecting a layer in one tab
-selects it in the other.
+**Static** is the design: document, base field, layers (shape, operation,
+colour, border) and export. **Motion** is the animation: format, clock, audio
+and, per layer, only its motion settings. **Sequence** chains scenes. They show
+as tabs, or **side by side** (toggle in the top bar; remembered per browser).
+Selecting a layer in one panel selects it in the other.
+
+## Sound
+
+In Motion → Audio pick a **source**: microphone / line-in, or an audio file
+(plays in a loop). Three band levels are measured every frame: low (20–160 Hz),
+mid (160–2000 Hz), high (2–12 kHz), with a **Gain**. Per layer, set **Drive**
+to a band: its size then follows that level between Small and Large instead of
+the clock (quiet = Small, loud = Large). Recordings include the sound when a
+source is active.
+
+## Sequence
+
+A **scene** is a snapshot of the whole design plus its motion settings, with a
+length in beats. Build a look in Static and Motion, then *Add scene from
+editor*; *Load into editor* brings a scene back to tweak it, *Update from
+editor* saves the tweak. **Play sequence** plays the scenes in order with hard
+cuts (optionally looping); **Record sequence** captures all scenes once as a
+video. Scene loads during playback are not undo steps.
 
 ## Animation (first sketch)
 
@@ -105,7 +126,10 @@ changes while playing (undo stays clean, any frame exports as a still):
   not the stripes: line width stays x.
 
 **Space** toggles play, **F** toggles fullscreen on the stage (black background,
-for a beamer or LED wall). Rendering is plain SVG; at A4 size this runs at 60 fps
+for a beamer or LED wall). **Record loop** in the Motion tab captures N beats in
+real time as a WebM video (MP4 in Safari) at the screen format's native pixel
+size (print formats are capped at 1920 px on the long side); make the length a
+multiple of every period for a seamless loop. Rendering is plain SVG; at A4 size this runs at 60 fps
 in Chromium. Audio / MIDI / Ableton Link input is not built yet — that is the
 brainstorm.
 

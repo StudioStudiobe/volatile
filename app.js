@@ -40,7 +40,28 @@ function animated() {
     angle: state.base.angle + a.drift * b,
     invert: state.invert !== flip,
     layerRotate: (L) => L.rotate + (L.spin || 0) * b,
+    // pulse: size breathes ±pulse % around the design size, one cycle per period
+    layerScale: (L) => {
+      if (!L.pulse) return 1;
+      const period = L.pulsePeriod || 4, off = L.pulseOffset || 0;
+      return 1 + (L.pulse / 100) * Math.sin(2 * Math.PI * (b - off) / period);
+    },
   };
+}
+
+/* Scaled copy of a shape about its centre (geometry, not a transform:
+   the stripe pattern and the border width must stay at x). */
+function scaledShape(s, k) {
+  if (k === 1) return s;
+  const [cx, cy] = shapeCenter(s);
+  const X = (x) => cx + (x - cx) * k, Y = (y) => cy + (y - cy) * k;
+  switch (s.type) {
+    case 'circle':  return { ...s, r: s.r * k };
+    case 'sector':  return { ...s, r: s.r * k };
+    case 'ellipse': return { ...s, rx: s.rx * k, ry: s.ry * k };
+    case 'rect':    return { ...s, x: X(s.x), y: Y(s.y), w: s.w * k, h: s.h * k, r: s.r * k };
+    case 'polygon': return { ...s, points: s.points.map((p) => [X(p[0]), Y(p[1])]) };
+  }
 }
 
 let viewInvert = false;   // set per render from animated().invert
@@ -70,7 +91,8 @@ function defaultOp(type) {
 }
 
 function defaultLayer(type) {
-  return { id: nid(), name: cap(type), visible: true, rotate: 0, spin: 0,
+  return { id: nid(), name: cap(type), visible: true, rotate: 0,
+           spin: 0, pulse: 0, pulsePeriod: 4, pulseOffset: 0,
            color: 'ink', border: false, borderColor: 'ink',
            shape: makeShape(type), op: defaultOp('stripes') };
 }
@@ -163,13 +185,14 @@ function buildSVG(forExport) {
   for (const L of state.layers) {
     if (!L.visible) continue;
     const attrs = layerAttrs(L, patterns);
-    const [cx, cy] = shapeCenter(L.shape);
+    const shape = scaledShape(L.shape, view.layerScale(L));
+    const [cx, cy] = shapeCenter(shape);
     const rot = r1(view.layerRotate(L));
     const tf = rot ? `rotate(${rot} ${cx} ${cy})` : '';
     const border = (L.border && L.op.type !== 'outline')
       ? ` stroke="${col(L.borderColor || 'ink')}" stroke-width="${state.base.line}" stroke-linejoin="miter"` : '';
     const meta = forExport ? '' : ` class="shape" data-id="${L.id}"`;
-    body += shapeMarkup(L.shape, attrs + border + meta, tf);
+    body += shapeMarkup(shape, attrs + border + meta, tf);
   }
 
   if (!forExport && state.selectedId) body += selectionOverlay();
@@ -403,7 +426,6 @@ function layerCard(L, i) {
     selectField('Shape', L.shape.type, SHAPES.map((s) => [s, s]), (t) => { L.shape = makeShape(t); renderAll(); }),
     ...shapeFields(L),
     numField('Rotate°', L.rotate, -180, 180, 1, (v) => { L.rotate = v; renderSVG(); }),
-    numField('Spin (°/beat)', L.spin || 0, -90, 90, 0.5, (v) => { L.spin = v; renderSVG(); }),
     selectField('Operation', L.op.type,
       [['stripes', 'stripes'], ['fill', 'fill (solid / knock-out)'], ['outline', 'outline']],
       (t) => { L.op = defaultOp(t); renderAll(); }),
@@ -413,6 +435,11 @@ function layerCard(L, i) {
     L.border && L.op.type !== 'outline'
       ? selectField('Border colour', L.borderColor || 'ink', COLOURS, (v) => { L.borderColor = v; renderSVG(); })
       : null,
+    el('div', { class: 'sub' }, 'Animation'),
+    numField('Spin (°/beat)', L.spin || 0, -90, 90, 0.5, (v) => { L.spin = v; renderSVG(); }),
+    numField('Pulse (±%)', L.pulse || 0, 0, 100, 1, (v) => { L.pulse = v; renderSVG(); }),
+    numField('Period (beats)', L.pulsePeriod || 4, 0.25, 16, 0.25, (v) => { L.pulsePeriod = v; renderSVG(); }),
+    numField('Offset (beats)', L.pulseOffset || 0, 0, 16, 0.25, (v) => { L.pulseOffset = v; renderSVG(); }),
   );
 }
 
@@ -640,7 +667,7 @@ function animationSection() {
     numField('Scroll (lines/beat)', a.scroll, -4, 4, 0.05, (v) => { a.scroll = v; paint(); markDirty(); }),
     numField('Drift (°/beat)', a.drift, -45, 45, 0.5, (v) => { a.drift = v; paint(); markDirty(); }),
     numField('Flip every N beats', a.flipEvery, 0, 32, 1, (v) => { a.flipEvery = v; paint(); markDirty(); }),
-    el('p', { class: 'hint' }, 'Rates are per beat, so a change of tempo keeps the same feel. Layers get a Spin rate in their card. Space toggles play; F toggles fullscreen.'),
+    el('p', { class: 'hint' }, 'Rates are per beat, so a change of tempo keeps the same feel. Each layer has its own Spin and Pulse (size breathing) in its card. Space toggles play; F toggles fullscreen.'),
   ]);
 }
 
@@ -683,7 +710,8 @@ function loadDefault() {                  // A4 portrait starting canvas (units:
   state.animation = { bpm: 120, scroll: 0, drift: 0, flipEvery: 0 };
   anim.beats = 0;
   state.layers = [
-    { id: nid(), name: 'Circle', visible: true, rotate: 0, spin: 0, color: 'ink', border: true, borderColor: 'ink',
+    { id: nid(), name: 'Circle', visible: true, rotate: 0, spin: 0, pulse: 0, pulsePeriod: 4, pulseOffset: 0,
+      color: 'ink', border: true, borderColor: 'ink',
       shape: { type: 'circle', cx: 1050, cy: 1485, r: 700 },
       op: { type: 'stripes', angle: 90, line: 0 } },
   ];

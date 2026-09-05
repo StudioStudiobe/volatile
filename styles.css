@@ -93,6 +93,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 }
 .lhead { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
 .lname { flex: 1; font-weight: 600; }
+.layer .sub { margin: 10px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--txt-dim); }
 
 button {
   background: var(--panel-2);

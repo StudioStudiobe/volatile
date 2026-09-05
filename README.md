@@ -91,11 +91,14 @@ exported SVG.
 
 ## Three panels: Static, Motion, Sequence
 
-**Static** is the design: document, base field, layers (shape, operation,
-colour, border) and export. **Motion** is the animation: format, clock, audio
-and, per layer, only its motion settings. **Sequence** chains scenes. They show
-as tabs, or **side by side** (toggle in the top bar; remembered per browser).
-Selecting a layer in one panel selects it in the other.
+**Static** is the design: layers (shape, operation, colour, border) and export.
+**Motion** is the animation: clock, audio, per-layer motion and recording.
+**Sequence** chains scenes. They show as tabs, or **side by side** (toggle in
+the top bar; remembered per browser). Nothing scrolls sideways: the panels
+shrink instead. Selecting a layer in one panel selects it in the other.
+
+**⚙ Setup** (top right) opens a fourth panel on the right with the things you
+set once: document format, grid and base field. It stays closed until you need it.
 
 ## Sound
 
@@ -125,7 +128,14 @@ changes while playing (undo stays clean, any frame exports as a still):
   pattern, so base and layers stay in phase.
 - **Drift** — base angle rotates (°/beat); layer stripe angles drift along with it.
 - **Flip every N beats** — global black/white inversion on a beat grid.
-- **Spin** (per layer) — the shape rotates (°/beat).
+- **Spin** (per layer) — *continuous* (°/beat), *step* (a hard turn of N° every
+  N beats) or *punch* (the same turn, but fast and eased right on the beat).
+- **Move** (per layer) — the design position is the **start**; tick *Move to an
+  end position* and drag the dashed ghost on the canvas (or type End x / y) to
+  set the **end**. *Travel* is the time from start to end in beats; *Return* is
+  ping-pong, jump back to start, or hold at the end; *Ease* smooth or linear.
+  Drive can also be a sound band (quiet = start, loud = end). The end point
+  rescales with the format like everything else.
 - **Small / Large** (per layer) — two sizes as % of the design size (100 = as
   drawn). The shape moves between them once per **Period** beats, shifted by
   **Offset** beats (so layers can alternate). On the beat it is at Large;

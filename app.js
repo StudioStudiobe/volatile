@@ -35,12 +35,21 @@ const state = {
 const seq = { playing: false, index: -1 };   // sequence playback (runtime, not in history)
 
 const anim = { playing: false, beats: 0, last: 0, raf: 0 };
-const ui = { tab: 'static', layout: 'tabs' };     // tab: 'static' | 'motion' | 'sequence'; layout: 'tabs' | 'split'
-try { if (localStorage.getItem('linework.layout') === 'split') ui.layout = 'split'; } catch (e) { /* private mode etc. */ }
+const ui = { tab: 'static', layout: 'tabs', setup: false };   // tab: 'static' | 'motion' | 'sequence'; layout: 'tabs' | 'split'; setup: right panel open
+try {
+  if (localStorage.getItem('linework.layout') === 'split') ui.layout = 'split';
+  if (localStorage.getItem('linework.setup') === '1') ui.setup = true;
+} catch (e) { /* private mode etc. */ }
 
 function setLayout(l) {
   ui.layout = l;
   try { localStorage.setItem('linework.layout', l); } catch (e) { /* ignore */ }
+  renderControls();
+}
+
+function toggleSetup() {
+  ui.setup = !ui.setup;
+  try { localStorage.setItem('linework.setup', ui.setup ? '1' : '0'); } catch (e) { /* ignore */ }
   renderControls();
 }
 
@@ -52,7 +61,34 @@ function animated() {
     phase: a.scroll * b * state.base.line * 1.5,   // lines/beat -> user units (one period per line)
     angle: state.base.angle + a.drift * b,
     invert: state.invert !== flip,
-    layerRotate: (L) => L.rotate + (L.spin || 0) * b,
+    // spin: continuous (°/beat), step (°/step, hard turn every N beats) or punch (fast eased turn on the beat)
+    layerRotate: (L) => {
+      const s = L.spin || 0;
+      if (!s) return L.rotate;
+      const mode = L.spinMode || 'continuous';
+      if (mode === 'continuous') return L.rotate + s * b;
+      const u = b / (L.spinEvery || 1), n = Math.floor(u), t = u - n;
+      if (mode === 'step') return L.rotate + s * n;
+      return L.rotate + s * (n + (1 - Math.pow(1 - t, 4)));      // punch: most of the turn right after the beat
+    },
+    // move: from the design position (start) to the End point. f = 0 start, 1 end.
+    layerOffset: (L) => {
+      if (!L.moveOn || L.moveX == null) return [0, 0];
+      const [cx, cy] = shapeCenter(L.shape);
+      let f;
+      if (L.moveDrive && L.moveDrive !== 'clock') {
+        f = audio.kind === 'off' ? 0 : audio.levels[L.moveDrive] || 0;
+      } else {
+        const period = L.movePeriod || 4, u = (b - (L.moveOffset || 0)) / period;
+        switch (L.moveMode) {
+          case 'jump': f = u < 0 ? 0 : u % 1; break;                       // A -> B, restart at A
+          case 'hold': f = Math.min(1, Math.max(0, u)); break;             // A -> B once, stay
+          default: { const t = ((u % 2) + 2) % 2; f = t < 1 ? t : 2 - t; } // ping-pong
+        }
+        if (L.moveEase !== 'linear') f = (1 - Math.cos(Math.PI * f)) / 2;
+      }
+      return [(L.moveX - cx) * f, (L.moveY - cy) * f];
+    },
     // size: moves between Small and Large (% of design size). On the beat
     // (offset) the shape is at Large; how it returns depends on the motion.
     layerScale: (L) => {
@@ -212,7 +248,9 @@ function buildSVG(forExport) {
   for (const L of state.layers) {
     if (!L.visible) continue;
     const attrs = layerAttrs(L, patterns);
-    const shape = scaledShape(L.shape, view.layerScale(L));
+    let shape = scaledShape(L.shape, view.layerScale(L));
+    const [ox, oy] = view.layerOffset(L);
+    if (ox || oy) { const m = clone(shape); translateShape(m, shape, ox, oy); shape = m; }
     const [cx, cy] = shapeCenter(shape);
     const rot = r1(view.layerRotate(L));
     const tf = rot ? `rotate(${rot} ${cx} ${cy})` : '';
@@ -319,6 +357,12 @@ function layoutToggle() {
   return el('button', { type: 'button', class: 'mini', title: 'Show the three panels as tabs or side by side',
                         onclick: () => setLayout(split ? 'tabs' : 'split') },
             split ? '⊟ Tabs' : '⊞ Side by side');
+}
+
+function setupToggle() {
+  return el('button', { type: 'button', class: 'mini' + (ui.setup ? ' active' : ''),
+                        title: 'Document, grid and base field (right panel)', onclick: toggleSetup },
+            '⚙ Setup');
 }
 
 function onKey(e) {
@@ -477,7 +521,7 @@ function layerCard(L, i) {
 
 /* Motion card: the same layer, only its animation settings */
 function motionCard(L) {
-  const moving = (L.spin || 0) !== 0 || (L.sizeMin ?? 100) !== (L.sizeMax ?? 100);
+  const moving = (L.spin || 0) !== 0 || (L.sizeMin ?? 100) !== (L.sizeMax ?? 100) || !!L.moveOn;
   return el('div', {
       class: 'layer' + (L.id === state.selectedId ? ' active' : ''),
       onclick: (e) => {
@@ -488,7 +532,46 @@ function motionCard(L) {
     el('div', { class: 'lhead' },
       el('span', { class: 'lname' }, L.name),
       el('span', { class: 'hint' }, (L.visible ? '' : 'hidden · ') + (moving ? 'moving' : 'still'))),
-    numField('Spin (°/beat)', L.spin || 0, -90, 90, 0.5, (v) => { L.spin = v; renderSVG(); }),
+    el('div', { class: 'grp' }, 'Spin'),
+    selectField('Spin mode', L.spinMode || 'continuous',
+      [['continuous', 'continuous (°/beat)'], ['step', 'step on the beat (°/step)'], ['punch', 'punch on the beat (°/step)']],
+      (v) => { L.spinMode = v; renderAll(); }),
+    numField((L.spinMode || 'continuous') === 'continuous' ? 'Spin (°/beat)' : 'Turn (°/step)', L.spin || 0, -180, 180, 0.5, (v) => { L.spin = v; renderSVG(); }),
+    (L.spinMode || 'continuous') !== 'continuous'
+      ? numField('Every N beats', L.spinEvery || 1, 0.25, 16, 0.25, (v) => { L.spinEvery = v; renderSVG(); }) : null,
+    el('div', { class: 'grp' }, 'Move (start = design position)'),
+    checkField('Move to an end position', !!L.moveOn, (v) => {
+      L.moveOn = v;
+      if (v && L.moveX == null) {                        // first time: put the end a grid cell to the right
+        const [cx, cy] = shapeCenter(L.shape);
+        L.moveX = r1(Math.min(state.doc.w, cx + gridLines().cw * 2)); L.moveY = cy;
+      }
+      state.selectedId = L.id; renderAll();
+    }),
+    ...(L.moveOn ? [
+      numField('End x', L.moveX, -state.doc.w, state.doc.w * 2, 1, (v) => { L.moveX = v; renderSVG(); }),
+      numField('End y', L.moveY, -state.doc.h, state.doc.h * 2, 1, (v) => { L.moveY = v; renderSVG(); }),
+      el('div', { class: 'addrow' },
+        btn('End = current position', () => { const [cx, cy] = shapeCenter(L.shape); L.moveX = cx; L.moveY = cy; renderAll(); }),
+        btn('Swap start / end', () => {
+          const [cx, cy] = shapeCenter(L.shape);
+          translateShape(L.shape, clone(L.shape), L.moveX - cx, L.moveY - cy);
+          roundShape(L.shape); L.moveX = cx; L.moveY = cy; renderAll();
+        })),
+      selectField('Drive', L.moveDrive || 'clock',
+        [['clock', 'clock (beats)'], ['low', 'sound: low (bass)'], ['mid', 'sound: mid'], ['high', 'sound: high'], ['all', 'sound: all']],
+        (v) => { L.moveDrive = v; renderAll(); }),
+      ...((L.moveDrive || 'clock') === 'clock' ? [
+        numField('Travel (beats)', L.movePeriod || 4, 0.25, 64, 0.25, (v) => { L.movePeriod = v; renderSVG(); }),
+        numField('Offset (beats)', L.moveOffset || 0, 0, 64, 0.25, (v) => { L.moveOffset = v; renderSVG(); }),
+        selectField('Return', L.moveMode || 'pingpong',
+          [['pingpong', 'ping-pong (back and forth)'], ['jump', 'jump (restart at start)'], ['hold', 'hold (stay at end)']],
+          (v) => { L.moveMode = v; renderSVG(); }),
+        selectField('Ease', L.moveEase || 'smooth', [['smooth', 'smooth'], ['linear', 'linear']], (v) => { L.moveEase = v; renderSVG(); }),
+      ] : [el('p', { class: 'hint' }, 'Position follows the sound level of that band: quiet = start, loud = end.')]),
+      el('p', { class: 'hint' }, 'Drag the dashed ghost on the canvas to place the end. It snaps to the grid.'),
+    ] : []),
+    el('div', { class: 'grp' }, 'Size'),
     numField('Small (% of size)', L.sizeMin ?? 100, 0, 300, 1, (v) => { L.sizeMin = v; renderSVG(); }),
     numField('Large (% of size)', L.sizeMax ?? 100, 0, 300, 1, (v) => { L.sizeMax = v; renderSVG(); }),
     selectField('Drive', L.drive || 'clock',
@@ -558,6 +641,7 @@ function reformat(w1, h1) {
       case 'polygon':
         sh.points = sh.points.map((p) => [X(p[0]), Y(p[1])]); break;
     }
+    if (L.moveX != null) { L.moveX = X(L.moveX); L.moveY = Y(L.moveY); }
     if (L.op.type === 'stripes' && L.op.line > 0) L.op.line = S(L.op.line);
     if (L.op.type === 'outline') L.op.width = Math.max(0.5, S(L.op.width));
   }
@@ -631,7 +715,17 @@ function renderControls() {
   const host = document.getElementById('panels');
   host.innerHTML = '';
   host.className = 'panels ' + ui.layout;
-  document.getElementById('tools').replaceChildren(historyRow(), layoutToggle());
+  document.getElementById('tools').replaceChildren(historyRow(), layoutToggle(), setupToggle());
+
+  const setup = document.getElementById('setup');
+  setup.innerHTML = '';
+  setup.hidden = !ui.setup;
+  if (ui.setup) {
+    setup.append(el('h2', { class: 'ptitle' }, 'Setup'));
+    setup.append(formatSection(true));
+    setup.append(gridSection());
+    setup.append(baseSection());
+  }
 
   const tabs = ui.layout === 'split' ? TABS.map((t) => t[0]) : [ui.tab];
   for (const t of tabs) {
@@ -663,11 +757,20 @@ function formatSection(withCustom) {
   ]);
 }
 
+function baseSection() {
+  return section('Base field', [
+    numField('Angle°', state.base.angle, 0, 180, 1, (v) => { state.base.angle = v; renderSVG(); }),
+    numField('Line width x', state.base.line, 1, 240, 1, (v) => { state.base.line = v; renderSVG(); }),
+    selectField('Line colour', state.base.inverted ? 'paper' : 'ink', COLOURS,
+      (v) => { state.base.inverted = v === 'paper'; renderSVG(); }),
+    el('p', { class: 'hint' }, 'Gap is locked to x / 2.' + lineInfo()),
+  ]);
+}
+
 function fillPanel(p, tab) {
   if (tab === 'sequence') { sequenceTab(p); return; }
 
   if (tab === 'motion') {
-    p.append(formatSection(false));
     p.append(animationSection());
     p.append(audioSection());
     const wrap = el('div', {});
@@ -677,31 +780,19 @@ function fillPanel(p, tab) {
       wrap,
     ]));
     p.append(recordRow());
-    p.append(exportSection(true));
     return;
   }
-
-  p.append(formatSection(true));
-  p.append(gridSection());
-
-  p.append(section('Base field', [
-    numField('Angle°', state.base.angle, 0, 180, 1, (v) => { state.base.angle = v; renderSVG(); }),
-    numField('Line width x', state.base.line, 1, 240, 1, (v) => { state.base.line = v; renderSVG(); }),
-    selectField('Line colour', state.base.inverted ? 'paper' : 'ink', COLOURS,
-      (v) => { state.base.inverted = v === 'paper'; renderSVG(); }),
-    el('p', { class: 'hint' }, 'Gap is locked to x / 2.' + lineInfo()),
-  ]));
 
   const wrap = el('div', {});
   state.layers.forEach((L, i) => wrap.append(layerCard(L, i)));
   p.append(section('Layers', [
-    el('p', { class: 'hint' }, 'Drag a shape to move it; drag a corner square to resize (opposite corner stays). Alt: from centre · Shift: keep proportions. Delete removes the selected layer.'),
+    el('p', { class: 'hint' }, 'Drag a shape to move it; drag a corner square to resize (opposite corner stays). Alt: from centre · Shift: keep proportions. Delete removes the selected layer. Format, grid and base field: ⚙ Setup (top right).'),
     wrap,
     el('div', { class: 'addrow' },
       ...SHAPES.map((t) => btn('+ ' + t, () => { const L = defaultLayer(t); state.layers.push(L); state.selectedId = L.id; renderAll(); }, 'add'))),
   ]));
 
-  p.append(exportSection(false));
+  p.append(exportSection());
 }
 
 function refreshDocInfo() {
@@ -1077,12 +1168,12 @@ function tabRow() {
   return el('div', { class: 'tabs' }, tab('static', 'Static'), tab('motion', 'Motion'), tab('sequence', 'Sequence'));
 }
 
-function exportSection(frame) {
+function exportSection() {
   return section('Export', [
     el('div', { class: 'addrow' },
       btn('Download SVG', exportSVG, 'exp'),
       btn('Download PNG', exportPNG, 'exp')),
-    frame ? el('p', { class: 'hint' }, 'Exports the frame as it is now (pause to pick one).') : null,
+    anim.playing || anim.beats ? el('p', { class: 'hint' }, 'Exports the frame as it is now (pause to pick one).') : null,
   ]);
 }
 
@@ -1244,7 +1335,24 @@ function selectionOverlay() {
     g += `<rect class="handle h${i}" data-handle="${i}" x="${hx - hs / 2}" y="${hy - hs / 2}" `
        + `width="${hs}" height="${hs}" fill="#ffffff" stroke="${ac}" stroke-width="${sw}"/>`;
   });
-  return g + `</g>`;
+  g += `</g>`;
+  if (L.moveOn && L.moveX != null) g += moveGhost(L, hs, sw);
+  return g;
+}
+
+/* End position of a moving layer: a draggable dashed ghost + a path line */
+function moveGhost(L, hs, sw) {
+  const [cx, cy] = shapeCenter(L.shape);
+  const ghost = clone(L.shape);
+  translateShape(ghost, L.shape, L.moveX - cx, L.moveY - cy);
+  const tf = L.rotate ? `rotate(${L.rotate} ${L.moveX} ${L.moveY})` : '';
+  const mg = '#ff3d9a';
+  let g = `<line x1="${cx}" y1="${cy}" x2="${L.moveX}" y2="${L.moveY}" stroke="${mg}" stroke-width="${sw}" `
+        + `stroke-dasharray="${hs * 0.5} ${hs * 0.5}" pointer-events="none"/>`;
+  g += shapeMarkup(ghost, `class="ghost" data-ghost="1" fill="rgba(255,61,154,0.08)" stroke="${mg}" stroke-width="${sw}" `
+                   + `stroke-dasharray="${hs} ${hs * 0.6}"`, tf);
+  g += `<circle cx="${L.moveX}" cy="${L.moveY}" r="${hs / 2.5}" fill="${mg}" pointer-events="none"/>`;
+  return g;
 }
 
 function toLocal(vx, vy, angleDeg) {           // rotate a vector by -angle, into the shape's frame
@@ -1347,6 +1455,15 @@ function onCanvasDown(e) {
     return;
   }
 
+  const ghostEl = e.target.closest('[data-ghost]');
+  if (ghostEl && state.selectedId) {
+    const L = state.layers.find((l) => l.id === state.selectedId);
+    if (!L) return;
+    drag = { mode: 'ghost', L, rect, sx, sy, snap: { x: L.moveX, y: L.moveY }, startUser: [ux, uy] };
+    e.preventDefault();
+    return;
+  }
+
   const shapeEl = e.target.closest('[data-id]');
   if (shapeEl) {
     const id = shapeEl.getAttribute('data-id');
@@ -1375,7 +1492,11 @@ function applyDrag() {
   let [ux, uy] = userCoords(pendingMouse, drag.rect, drag.sx, drag.sy);
   const snapping = state.grid.snap && !(pendingMouse.metaKey || pendingMouse.ctrlKey);
   const thr = 8 * drag.sx;                              // 8 screen px
-  if (drag.mode === 'move') {
+  if (drag.mode === 'ghost') {                          // end point of a moving layer
+    let ex = drag.snap.x + ux - drag.startUser[0], ey = drag.snap.y + uy - drag.startUser[1];
+    if (snapping) [ex, ey] = snapPoint(ex, ey, thr);
+    drag.L.moveX = ex; drag.L.moveY = ey;
+  } else if (drag.mode === 'move') {
     const dx = ux - drag.startUser[0], dy = uy - drag.startUser[1];
     translateShape(drag.L.shape, drag.snap, dx, dy);
     if (snapping) {
@@ -1399,6 +1520,7 @@ function roundShape(sh) {
 function onCanvasUp() {
   if (!drag) return;
   roundShape(drag.L.shape);
+  if (drag.L.moveX != null) { drag.L.moveX = r1(drag.L.moveX); drag.L.moveY = r1(drag.L.moveY); }
   drag = null;
   renderAll();        // sync the numeric fields with the dragged geometry
 }

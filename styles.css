@@ -33,19 +33,27 @@ html, body {
 main {
   display: flex;
   height: calc(100vh - 43px);
+  overflow: hidden;          /* never scroll the page sideways: panels shrink instead */
 }
 
 /* ---------- Panels ---------- */
-.panels { display: flex; flex: 0 0 auto; max-width: 75vw; overflow-x: auto; }
+.panels { display: flex; flex: 0 1 auto; min-width: 0; }
 .panel {
   width: 360px;
   flex: 0 0 360px;
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   background: var(--panel);
   border-right: 1px solid var(--line);
   padding: 6px 12px 40px;
 }
-.panels.split .panel { width: 300px; flex-basis: 300px; }
+/* side by side: three equal columns that shrink before the stage does */
+.panels.split { flex: 1 1 62vw; max-width: 62vw; }
+.panels.split .panel { width: auto; flex: 1 1 0; }
+.panel.setup { flex: 0 0 320px; width: 320px; border-right: 0; border-left: 1px solid var(--line); }
+.stage { min-width: 320px; }
+button.mini.active { border-color: var(--accent); color: var(--accent); }
 .ptitle {
   margin: 6px 0 4px; padding: 8px 0; border-bottom: 1px solid var(--line);
   font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--txt);
@@ -144,6 +152,7 @@ button.exp { background: #2a2f36; }
 }
 .preview .shape { cursor: move; }
 .preview .handle { cursor: nwse-resize; }
+.preview .ghost { cursor: move; }
 .preview .handle.h1, .preview .handle.h3 { cursor: nesw-resize; }
 
 .layer.active {

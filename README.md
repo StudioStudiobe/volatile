@@ -151,11 +151,12 @@ changes while playing (undo stays clean, any frame exports as a still):
   Drive can also be a sound band (quiet = start, loud = end). The end point
   rescales with the format like everything else.
 - **Small / Large** (per layer) — two sizes as % of the design size (100 = as
-  drawn). The shape moves between them once per **Period** beats, shifted by
-  **Offset** beats (so layers can alternate). On the beat it is at Large;
-  **Motion** decides the way back: *smooth* (ease), *snap* (hard switch, half
-  cycle each) or *punch* (hit large, ease back to small). The geometry scales,
-  not the stripes: line width stays x.
+  drawn). **On the beat** picks which one is hit on the beat; **Travel** is the
+  time to the other one (beats); **Return** is *ping-pong* (there and back,
+  continuous), *jump* (restart on the beat), *hold* (go once, stay) or *snap*
+  (hard switch); **Ease** is smooth, linear or punch (fast away, soft arrival);
+  **Offset** shifts the cycle so layers can alternate. The same fields drive the
+  base line width. The geometry scales, not the stripes: line width stays x.
 
 **Space** toggles play, **F** toggles fullscreen on the stage (black background,
 for a beamer or LED wall). **Record loop** in the Motion tab captures N beats in

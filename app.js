@@ -76,6 +76,42 @@ function travelF(b, period, off, mode, ease) {
   return ease === 'linear' ? f : (1 - Math.cos(Math.PI * f)) / 2;
 }
 
+/* Value between Min and Max (% -> factor) for a "size-like" parameter.
+   Fields on `o` with prefix `pre`: Min, Max, Drive, Start ('large' | 'small' = the
+   value on the beat), Travel (beats from one to the other), Offset, Return
+   ('pingpong' | 'jump' | 'hold' | 'snap'), Ease ('smooth' | 'linear' | 'punch').
+   Legacy Period + Mode fields are translated on the fly. */
+function cycleValue(o, pre, b) {
+  const lo = o[pre + 'Min'] ?? 100, hi = o[pre + 'Max'] ?? 100;
+  if (lo === hi) return lo / 100;
+  const drive = o[pre + 'Drive'];
+  let f;                                                   // 0 = Small, 1 = Large
+  if (drive && drive !== 'clock') {
+    f = soundLevel(drive);
+  } else {
+    let ret = o[pre + 'Return'], travel = o[pre + 'Travel'], ease = o[pre + 'Ease'];
+    const start = o[pre + 'Start'] || 'large';
+    if (!ret) {                                            // legacy: Period + Mode
+      const m = o[pre + 'Mode'] || 'smooth', P = o[pre + 'Period'] || 1;
+      ret = m === 'snap' ? 'snap' : m === 'punch' ? 'jump' : 'pingpong';
+      travel = m === 'punch' ? P : P / 2;
+      ease = m === 'punch' ? 'punch' : 'smooth';
+    }
+    const u = (b - (o[pre + 'Offset'] || 0)) / (travel || 0.5);
+    let t;                                                 // 0 = at the start value, 1 = at the other
+    switch (ret) {
+      case 'snap': t = ((u % 2) + 2) % 2 < 1 ? 0 : 1; break;
+      case 'jump': t = u < 0 ? 0 : u % 1; break;
+      case 'hold': t = Math.min(1, Math.max(0, u)); break;
+      default: { const w = ((u % 2) + 2) % 2; t = w < 1 ? w : 2 - w; }
+    }
+    if (ease === 'punch') t = 1 - (1 - t) * (1 - t);        // fast away, soft arrival
+    else if (ease !== 'linear') t = (1 - Math.cos(Math.PI * t)) / 2;
+    f = start === 'large' ? 1 - t : t;
+  }
+  return (lo + (hi - lo) * f) / 100;
+}
+
 function soundLevel(band) {
   return audio.kind === 'off' ? 0 : (audio.levels[band] || 0);
 }
@@ -85,13 +121,7 @@ function animated() {
   const a = state.animation, b = anim.beats;
   const flip = a.flipEvery > 0 && Math.floor(b / a.flipEvery) % 2 === 1;
   // base line width between Small and Large (% of x); layers that inherit x follow
-  const lo = a.lineMin ?? 100, hi = a.lineMax ?? 100;
-  let lineK = lo / 100;
-  if (lo !== hi) {
-    const f = (a.lineDrive && a.lineDrive !== 'clock') ? soundLevel(a.lineDrive) : cycleF(b, a.linePeriod, a.lineOffset, a.lineMode);
-    lineK = (lo + (hi - lo) * f) / 100;
-  }
-  const baseLine = Math.max(0.5, state.base.line * lineK);
+  const baseLine = Math.max(0.5, state.base.line * cycleValue(a, 'line', b));
   // base angle: drift (continuous) + swing towards an end angle
   let delta = (a.drift || 0) * b;
   if (a.swingOn && a.swingTo != null) {
@@ -124,13 +154,7 @@ function animated() {
     },
     // size: moves between Small and Large (% of design size). On the beat
     // (offset) the shape is at Large; how it returns depends on the motion.
-    layerScale: (L) => {
-      const lo = L.sizeMin ?? 100, hi = L.sizeMax ?? 100;
-      if (lo === hi) return lo / 100;
-      const f = (L.drive && L.drive !== 'clock') ? soundLevel(L.drive)
-              : cycleF(b, L.sizePeriod, L.sizeOffset, L.sizeMode);
-      return (lo + (hi - lo) * f) / 100;
-    },
+    layerScale: (L) => cycleValue({ ...L, sizeDrive: L.drive }, 'size', b),
   };
 }
 
@@ -178,7 +202,7 @@ function defaultOp(type) {
 
 function defaultLayer(type) {
   return { id: nid(), name: cap(type), visible: true, rotate: 0,
-           spin: 0, sizeMin: 100, sizeMax: 100, sizePeriod: 1, sizeOffset: 0, sizeMode: 'smooth',
+           spin: 0, sizeMin: 100, sizeMax: 100, sizeStart: 'large', sizeTravel: 0.5, sizeOffset: 0, sizeReturn: 'pingpong', sizeEase: 'smooth',
            color: 'ink', border: false, borderColor: 'ink',
            shape: makeShape(type), op: defaultOp('stripes') };
 }
@@ -604,16 +628,7 @@ function motionCard(L) {
       el('p', { class: 'hint' }, 'Drag the dashed ghost on the canvas to place the end. It snaps to the grid.'),
     ] : []),
     el('div', { class: 'grp' }, 'Size'),
-    numField('Small (% of size)', L.sizeMin ?? 100, 0, 500, 1, (v) => { L.sizeMin = v; renderSVG(); }),
-    numField('Large (% of size)', L.sizeMax ?? 100, 0, 500, 1, (v) => { L.sizeMax = v; renderSVG(); }),
-    selectField('Drive', L.drive || 'clock', DRIVES, (v) => { L.drive = v; renderAll(); }),
-    ...((L.drive || 'clock') === 'clock' ? [
-      numField('Period (beats)', L.sizePeriod || 1, 0.25, 16, 0.25, (v) => { L.sizePeriod = v; renderSVG(); }),
-      numField('Offset (beats)', L.sizeOffset || 0, 0, 16, 0.25, (v) => { L.sizeOffset = v; renderSVG(); }),
-      selectField('Motion', L.sizeMode || 'smooth',
-        [['smooth', 'smooth (ease between)'], ['snap', 'snap (hard switch)'], ['punch', 'punch (large on beat, ease back)']],
-        (v) => { L.sizeMode = v; renderSVG(); }),
-    ] : [el('p', { class: 'hint' }, 'Size follows the sound level of that band: quiet = Small, loud = Large. Set Gain in the Audio section.')]),
+    ...cycleFields(L, 'size', 'drive', 'size', renderSVG, renderAll),
   );
 }
 
@@ -1524,22 +1539,41 @@ function animationSection() {
 
 const DRIVES = [['clock', 'clock (beats)'], ['low', 'sound: low (bass)'], ['mid', 'sound: mid'], ['high', 'sound: high'], ['all', 'sound: all']];
 
+/* Small / Large + how to move between them. `o` holds the fields with prefix `pre`;
+   `driveKey` names the drive field (layers keep the older `drive`). */
+function cycleFields(o, pre, driveKey, labelUnit, onChange, onStructure) {
+  // translate legacy Period + Mode once, so the fields show what is actually running
+  if (!o[pre + 'Return'] && (o[pre + 'Mode'] || o[pre + 'Period'])) {
+    const m = o[pre + 'Mode'] || 'smooth', P = o[pre + 'Period'] || 1;
+    o[pre + 'Return'] = m === 'snap' ? 'snap' : m === 'punch' ? 'jump' : 'pingpong';
+    o[pre + 'Travel'] = m === 'punch' ? P : P / 2;
+    o[pre + 'Ease'] = m === 'punch' ? 'punch' : 'smooth';
+    delete o[pre + 'Mode']; delete o[pre + 'Period'];
+  }
+  const clock = (o[driveKey] || 'clock') === 'clock';
+  return [
+    numField(`Small (% of ${labelUnit})`, o[pre + 'Min'] ?? 100, 0, 500, 1, (v) => { o[pre + 'Min'] = v; onChange(); }),
+    numField(`Large (% of ${labelUnit})`, o[pre + 'Max'] ?? 100, 0, 500, 1, (v) => { o[pre + 'Max'] = v; onChange(); }),
+    selectField('Drive', o[driveKey] || 'clock', DRIVES, (v) => { o[driveKey] = v; onStructure(); }),
+    ...(clock ? [
+      selectField('On the beat', o[pre + 'Start'] || 'large', [['large', 'Large, then to Small'], ['small', 'Small, then to Large']], (v) => { o[pre + 'Start'] = v; onChange(); }),
+      numField('Travel (beats)', o[pre + 'Travel'] ?? 0.5, 0.125, 32, 0.125, (v) => { o[pre + 'Travel'] = v; onChange(); }),
+      selectField('Return', o[pre + 'Return'] || 'pingpong',
+        [['pingpong', 'ping-pong (there and back, no jump)'], ['jump', 'jump (restart on the beat)'], ['hold', 'hold (go once, stay)'], ['snap', 'snap (hard switch, no travel)']],
+        (v) => { o[pre + 'Return'] = v; onChange(); }),
+      selectField('Ease', o[pre + 'Ease'] || 'smooth', [['smooth', 'smooth'], ['linear', 'linear'], ['punch', 'punch (fast away, soft arrival)']], (v) => { o[pre + 'Ease'] = v; onChange(); }),
+      numField('Offset (beats)', o[pre + 'Offset'] || 0, 0, 32, 0.125, (v) => { o[pre + 'Offset'] = v; onChange(); }),
+    ] : [el('p', { class: 'hint' }, 'Follows the sound level of that band: quiet = Small, loud = Large.')]),
+  ];
+}
+
 function baseMotionSection() {
   const a = state.animation, p = () => { paint(); markDirty(); };
   return section('Base field', [
     numField('Scroll (lines/beat)', a.scroll || 0, -4, 4, 0.05, (v) => { a.scroll = v; p(); }),
     numField('Drift (°/beat)', a.drift || 0, -45, 45, 0.5, (v) => { a.drift = v; p(); }),
     el('div', { class: 'grp' }, 'Line width (layers inheriting x follow)'),
-    numField('Small (% of x)', a.lineMin ?? 100, 10, 500, 1, (v) => { a.lineMin = v; p(); }),
-    numField('Large (% of x)', a.lineMax ?? 100, 10, 500, 1, (v) => { a.lineMax = v; p(); }),
-    selectField('Drive', a.lineDrive || 'clock', DRIVES, (v) => { a.lineDrive = v; renderAll(); }),
-    ...((a.lineDrive || 'clock') === 'clock' ? [
-      numField('Period (beats)', a.linePeriod || 1, 0.25, 16, 0.25, (v) => { a.linePeriod = v; p(); }),
-      numField('Offset (beats)', a.lineOffset || 0, 0, 16, 0.25, (v) => { a.lineOffset = v; p(); }),
-      selectField('Motion', a.lineMode || 'smooth',
-        [['smooth', 'smooth (ease between)'], ['snap', 'snap (hard switch)'], ['punch', 'punch (large on beat, ease back)']],
-        (v) => { a.lineMode = v; p(); }),
-    ] : [el('p', { class: 'hint' }, 'Width follows the sound level: quiet = Small, loud = Large.')]),
+    ...cycleFields(a, 'line', 'lineDrive', 'x', p, renderAll),
     el('div', { class: 'grp' }, 'Angle (start = base angle)'),
     checkField('Swing to an end angle', !!a.swingOn, (v) => { a.swingOn = v; if (a.swingTo == null) a.swingTo = (state.base.angle + 90) % 180; renderAll(); }),
     ...(a.swingOn ? [
@@ -1618,7 +1652,7 @@ function loadDefault() {                  // A4 portrait starting canvas (units:
   anim.beats = 0;
   state.layers = [
     { id: nid(), name: 'Circle', visible: true, rotate: 0, spin: 0,
-      sizeMin: 100, sizeMax: 100, sizePeriod: 1, sizeOffset: 0, sizeMode: 'smooth',
+      sizeMin: 100, sizeMax: 100, sizeStart: 'large', sizeTravel: 0.5, sizeOffset: 0, sizeReturn: 'pingpong', sizeEase: 'smooth',
       color: 'ink', border: true, borderColor: 'ink',
       shape: { type: 'circle', cx: 1050, cy: 1485, r: 700 },
       op: { type: 'stripes', angle: 90, line: 0 } },

@@ -79,6 +79,13 @@ hold **Alt / Option** to scale from the centre and **Shift** to keep proportions
 numeric fields sync when you release. Selection handles never appear in the
 exported SVG.
 
+## Two tabs: Static and Motion
+
+The panel has two tabs. **Static** is the design: document, base field, layers
+(shape, operation, colour, border) and export. **Motion** is the animation: the
+clock and, per layer, only its motion settings. Selecting a layer in one tab
+selects it in the other.
+
 ## Animation (first sketch)
 
 A beat clock drives rates that live in the design, so the design itself never

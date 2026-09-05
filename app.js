@@ -30,6 +30,7 @@ const state = {
 };
 
 const anim = { playing: false, beats: 0, last: 0, raf: 0 };
+const ui = { tab: 'static' };     // 'static' (design) | 'motion' (animation)
 
 /* Animated view of the design at the current clock (pure: no state mutation) */
 function animated() {
@@ -445,7 +446,22 @@ function layerCard(L, i) {
     L.border && L.op.type !== 'outline'
       ? selectField('Border colour', L.borderColor || 'ink', COLOURS, (v) => { L.borderColor = v; renderSVG(); })
       : null,
-    el('div', { class: 'sub' }, 'Animation'),
+  );
+}
+
+/* Motion card: the same layer, only its animation settings */
+function motionCard(L) {
+  const moving = (L.spin || 0) !== 0 || (L.sizeMin ?? 100) !== (L.sizeMax ?? 100);
+  return el('div', {
+      class: 'layer' + (L.id === state.selectedId ? ' active' : ''),
+      onclick: (e) => {
+        if (e.target.closest('input, select, textarea, button')) return;
+        if (state.selectedId !== L.id) { state.selectedId = L.id; renderAll(); }
+      },
+    },
+    el('div', { class: 'lhead' },
+      el('span', { class: 'lname' }, L.name),
+      el('span', { class: 'hint' }, (L.visible ? '' : 'hidden · ') + (moving ? 'moving' : 'still'))),
     numField('Spin (°/beat)', L.spin || 0, -90, 90, 0.5, (v) => { L.spin = v; renderSVG(); }),
     numField('Small (% of size)', L.sizeMin ?? 100, 0, 300, 1, (v) => { L.sizeMin = v; renderSVG(); }),
     numField('Large (% of size)', L.sizeMax ?? 100, 0, 300, 1, (v) => { L.sizeMax = v; renderSVG(); }),
@@ -576,6 +592,19 @@ function renderControls() {
   const p = document.getElementById('panel');
   p.innerHTML = '';
   p.append(historyRow());
+  p.append(tabRow());
+
+  if (ui.tab === 'motion') {
+    p.append(animationSection());
+    const wrap = el('div', {});
+    state.layers.forEach((L) => wrap.append(motionCard(L)));
+    p.append(section('Layers', [
+      el('p', { class: 'hint' }, 'Per layer: spin and a Small / Large size the shape moves between. Shapes and colours are set in the Static tab.'),
+      wrap,
+    ]));
+    p.append(exportSection());
+    return;
+  }
 
   const custom = (k) => (v) => { state.doc[k] = v; state.doc.format = null; renderSVG(); refreshDocInfo(); };
   p.append(section('Document', [
@@ -611,13 +640,7 @@ function renderControls() {
       ...SHAPES.map((t) => btn('+ ' + t, () => { const L = defaultLayer(t); state.layers.push(L); state.selectedId = L.id; renderAll(); }, 'add'))),
   ]));
 
-  p.append(animationSection());
-
-  p.append(section('Export', [
-    el('div', { class: 'addrow' },
-      btn('Download SVG', exportSVG, 'exp'),
-      btn('Download PNG', exportPNG, 'exp')),
-  ]));
+  p.append(exportSection());
 }
 
 function refreshDocInfo() {
@@ -671,7 +694,7 @@ function toggleFullscreen() {
 
 function animationSection() {
   const a = state.animation;
-  return section('Animation (sketch)', [
+  return section('Clock', [
     el('div', { class: 'addrow' },
       el('button', { type: 'button', id: 'play', onclick: () => (anim.playing ? pause() : play()) },
          anim.playing ? '❚❚ Pause' : '▶ Play'),
@@ -681,7 +704,24 @@ function animationSection() {
     numField('Scroll (lines/beat)', a.scroll, -4, 4, 0.05, (v) => { a.scroll = v; paint(); markDirty(); }),
     numField('Drift (°/beat)', a.drift, -45, 45, 0.5, (v) => { a.drift = v; paint(); markDirty(); }),
     numField('Flip every N beats', a.flipEvery, 0, 32, 1, (v) => { a.flipEvery = v; paint(); markDirty(); }),
-    el('p', { class: 'hint' }, 'Rates are per beat, so a change of tempo keeps the same feel. Each layer has its own Spin and Small/Large size in its card. Space toggles play; F toggles fullscreen.'),
+    el('p', { class: 'hint' }, 'Rates are per beat, so a change of tempo keeps the same feel. Space toggles play; F toggles fullscreen. The design itself never changes while playing.'),
+  ]);
+}
+
+function tabRow() {
+  const tab = (id, label) => el('button', {
+    type: 'button', class: 'tab' + (ui.tab === id ? ' active' : ''),
+    onclick: () => { ui.tab = id; renderControls(); },
+  }, label);
+  return el('div', { class: 'tabs' }, tab('static', 'Static'), tab('motion', 'Motion'));
+}
+
+function exportSection() {
+  return section('Export', [
+    el('div', { class: 'addrow' },
+      btn('Download SVG', exportSVG, 'exp'),
+      btn('Download PNG', exportPNG, 'exp')),
+    ui.tab === 'motion' ? el('p', { class: 'hint' }, 'Exports the frame as it is now (pause to pick one).') : null,
   ]);
 }
 

@@ -307,6 +307,7 @@ function flushHistory() {
     if (undoStack.length > HISTORY_MAX) undoStack.shift();
     redoStack = [];
     stable = cur;
+    autosave();
   }
   updateHistoryButtons();
 }
@@ -376,6 +377,8 @@ function onKey(e) {
   } else if (mod && e.key.toLowerCase() === 'y') {
     if (typing) return;
     e.preventDefault(); redo();
+  } else if (mod && e.key.toLowerCase() === 's') {
+    e.preventDefault(); saveProject();
   } else if (e.key === ' ' && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && tag !== 'BUTTON') {
     e.preventDefault(); anim.playing ? pause() : play();
   } else if ((e.key === 'f' || e.key === 'F') && !mod && !typing && tag !== 'INPUT' && tag !== 'SELECT') {
@@ -715,13 +718,17 @@ function renderControls() {
   const host = document.getElementById('panels');
   host.innerHTML = '';
   host.className = 'panels ' + ui.layout;
-  document.getElementById('tools').replaceChildren(historyRow(), layoutToggle(), setupToggle());
+  document.getElementById('tools').replaceChildren(
+    el('span', { class: 'pname-top', title: 'Project name (rename in ⚙ Setup)' }, project.name),
+    el('button', { type: 'button', class: 'mini', title: '⌘/Ctrl+S', onclick: saveProject }, '💾 Save'),
+    historyRow(), layoutToggle(), setupToggle());
 
   const setup = document.getElementById('setup');
   setup.innerHTML = '';
   setup.hidden = !ui.setup;
   if (ui.setup) {
     setup.append(el('h2', { class: 'ptitle' }, 'Setup'));
+    setup.append(projectSection());
     setup.append(formatSection(true));
     setup.append(gridSection());
     setup.append(baseSection());
@@ -800,6 +807,131 @@ function refreshDocInfo() {
 }
 
 function renderAll() { renderControls(); renderSVG(); updateHistoryButtons(); }
+
+/* ============================================================
+   Projects — save / load
+   Autosave in this browser on every history step; named projects in
+   localStorage; JSON files for backup, transfer and version control.
+   ============================================================ */
+const project = { name: 'Untitled' };
+const PKEY = 'linework.projects', AKEY = 'linework.autosave';
+
+function projectData() {
+  return { app: 'linework', version: 1, name: project.name,
+           savedAt: new Date().toISOString(), state: JSON.parse(serialize()) };
+}
+
+function listProjects() {
+  try { return JSON.parse(localStorage.getItem(PKEY) || '{}'); } catch (e) { return {}; }
+}
+
+function writeProjects(all) {
+  try { localStorage.setItem(PKEY, JSON.stringify(all)); return true; }
+  catch (e) { alert('Could not save in this browser: ' + e.message); return false; }
+}
+
+function saveProject() {
+  const name = (project.name || '').trim() || 'Untitled';
+  project.name = name;
+  const all = listProjects();
+  all[name] = projectData();
+  if (writeProjects(all)) renderControls();
+}
+
+function deleteProject(name) {
+  const all = listProjects();
+  delete all[name];
+  writeProjects(all);
+  renderControls();
+}
+
+/* ids must stay unique after a load: continue numbering past the highest one */
+function bumpUid(json) {
+  let max = 0;
+  json.replace(/"L(\d+)"/g, (m, n) => { max = Math.max(max, +n); return m; });
+  if (max >= _uid) _uid = max + 1;
+}
+
+function loadProjectData(d, opts) {
+  if (!d || d.app !== 'linework' || !d.state) { alert('Not a Linework project file.'); return false; }
+  pause();
+  seq.playing = false;
+  Object.assign(state, d.state);
+  if (!state.grid) state.grid = { show: true, snap: true, cols: 12, rows: 0, margin: 0 };
+  if (!state.scenes) state.scenes = [];
+  if (!state.sequence) state.sequence = { loop: true };
+  project.name = d.name || 'Untitled';
+  state.selectedId = null;
+  anim.beats = 0;
+  bumpUid(JSON.stringify(d.state));
+  undoStack = []; redoStack = []; stable = null;
+  renderAll();
+  flushHistory();                        // fresh history baseline
+  if (!(opts && opts.silent)) autosave();
+  return true;
+}
+
+function loadProject(name) {
+  const d = listProjects()[name];
+  if (d) loadProjectData(d);
+}
+
+function autosave() {
+  try { localStorage.setItem(AKEY, JSON.stringify(projectData())); } catch (e) { /* quota / private mode */ }
+}
+
+function restoreAutosave() {
+  try {
+    const raw = localStorage.getItem(AKEY);
+    if (!raw) return false;
+    return loadProjectData(JSON.parse(raw), { silent: true });
+  } catch (e) { return false; }
+}
+
+function exportProject() {
+  const name = (project.name || 'Untitled').replace(/[^\w\- ]+/g, '').trim() || 'Untitled';
+  download(new Blob([JSON.stringify(projectData(), null, 2)], { type: 'application/json' }), name + '.linework.json');
+}
+
+function importProjectFile(file) {
+  const fr = new FileReader();
+  fr.onload = () => { try { loadProjectData(JSON.parse(fr.result)); } catch (e) { alert('Could not read this file: ' + e.message); } };
+  fr.readAsText(file);
+}
+
+function newProject() {
+  if (!confirm('Start a new project? The current one stays saved only if you saved it.')) return;
+  loadDefault();
+  project.name = 'Untitled';
+  undoStack = []; redoStack = []; stable = null;
+  flushHistory();
+  autosave();
+  renderControls();
+}
+
+function projectSection() {
+  const all = listProjects();
+  const names = Object.keys(all).sort((a, b) => (all[b].savedAt || '').localeCompare(all[a].savedAt || ''));
+  const fileInput = el('input', { type: 'file', accept: '.json,application/json',
+    onchange: (e) => { const f = e.target.files[0]; if (f) importProjectFile(f); e.target.value = ''; } });
+  const when = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
+  return section('Project', [
+    el('label', { class: 'row' }, el('span', { class: 'lbl' }, 'Name'),
+       el('input', { type: 'text', value: project.name, oninput: (e) => { project.name = e.target.value; } })),
+    el('div', { class: 'addrow' },
+      btn('Save in browser', saveProject),
+      btn('Save as file', exportProject),
+      btn('Open file…', () => fileInput.click()),
+      btn('New', newProject, 'danger')),
+    el('div', { hidden: true }, fileInput),
+    names.length ? el('div', { class: 'plist' }, ...names.map((n) => el('div', { class: 'pitem' + (n === project.name ? ' cur' : '') },
+      el('span', { class: 'pname', title: when(all[n].savedAt) }, n),
+      el('span', { class: 'hint' }, when(all[n].savedAt)),
+      btn('Load', () => loadProject(n), 'mini'),
+      btn('✕', () => { if (confirm(`Delete "${n}"?`)) deleteProject(n); }, 'mini danger')))) : null,
+    el('p', { class: 'hint' }, 'The current state is also autosaved in this browser and restored when you come back. ⌘/Ctrl+S saves under the current name. Files are plain JSON.'),
+  ]);
+}
 
 /* ============================================================
    Scenes & sequence
@@ -1544,7 +1676,8 @@ function initCanvas() {
 if (typeof document !== 'undefined') {
   loadDefault();
   flushHistory();      // seed the stable snapshot; nothing to undo yet
+  restoreAutosave();   // pick up where the browser left off
   initCanvas();
 } else if (typeof module !== 'undefined') {
-  module.exports = { state, anim, audio, seq, buildSVG, gridLines, snapMoveDelta, snapPoint, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
+  module.exports = { state, anim, audio, seq, project, projectData, buildSVG, gridLines, snapMoveDelta, snapPoint, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
 }

@@ -151,6 +151,15 @@ multiple of every period for a seamless loop. Rendering is plain SVG; at A4 size
 in Chromium. Audio / MIDI / Ableton Link input is not built yet — that is the
 brainstorm.
 
+## Projects
+
+Everything (design, motion, scenes, grid, format) is one project. It is
+**autosaved** in the browser and restored when you come back. In ⚙ Setup →
+Project you can name it, **save it in the browser** (⌘/Ctrl+S; a list lets you
+load or delete saved projects), **save it as a file** (plain JSON, good for
+backup, transfer or git) and **open** such a file. *New* starts from the default
+canvas.
+
 ## Export
 **SVG** (vector; print formats carry their size in mm) and **PNG** at the format's
 native size: 300 dpi for print (A4 = 2480 × 3508 px, A1 = 7016 × 9933 px),
@@ -170,5 +179,4 @@ Actions*. The site then publishes at `https://studiostudiobe.github.io/volatile/
 - Typography layer; multi-page / spread guides.
 - **Randomise / generate variants** if we want a generative mode.
 - Multi-select and a rotate handle on the canvas (single-shape move, resize and grid snapping already work).
-- Save / load a composition as JSON (state currently lives only in the tab).
 - DJ-visual mode: audio-reactive or tempo-synced input, per-parameter LFOs, a canvas/WebGL renderer if SVG gets too slow at wall resolution.

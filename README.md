@@ -31,7 +31,7 @@ Every layer can be rotated.
   (figure-ground swap), change **line** width (local density). `line = 0` inherits
   the base width.
 - **fill** — solid fill: `paper` (knock-out / negative space) or `ink` (solid black).
-- **outline** — stroke only, optionally **dashed** — for construction lines.
+- **outline** — stroke only, for construction lines.
 
 Any layer can also carry a **border** — a stroke around the shape at the base line
 width `x` (so a white knock-out with a black outline gives the dome look).
@@ -69,8 +69,28 @@ the panel do the same. A slider drag or a canvas drag counts as one step.
 
 ### On the canvas
 Click a shape (or its layer) to select it, **drag** to move, and drag a **corner
-handle** to resize (center-anchored, rotation-aware). The numeric fields sync when
-you release. Selection handles never appear in the exported SVG.
+handle** to resize. The opposite corner stays put, like in any drawing app;
+hold **Alt / Option** to scale from the centre and **Shift** to keep proportions
+(circles, sectors and polygons always keep theirs). Works on rotated shapes. The
+numeric fields sync when you release. Selection handles never appear in the
+exported SVG.
+
+## Animation (first sketch)
+
+A beat clock drives rates that live in the design, so the design itself never
+changes while playing (undo stays clean, any frame exports as a still):
+
+- **BPM** — tempo; all rates are *per beat*, so changing tempo keeps the feel.
+- **Scroll** — stripes travel along their normal (lines per beat). Shared by every
+  pattern, so base and layers stay in phase.
+- **Drift** — base angle rotates (°/beat); layer stripe angles drift along with it.
+- **Flip every N beats** — global black/white inversion on a beat grid.
+- **Spin** (per layer) — the shape rotates (°/beat).
+
+**Space** toggles play, **F** toggles fullscreen on the stage (black background,
+for a beamer or LED wall). Rendering is plain SVG; at A4 size this runs at 60 fps
+in Chromium. Audio / MIDI / Ableton Link input is not built yet — that is the
+brainstorm.
 
 ## Export
 **SVG** (vector; print formats carry their size in mm) and **PNG** at the format's
@@ -92,4 +112,4 @@ Actions*. The site then publishes at `https://studiostudiobe.github.io/volatile/
 - **Randomise / generate variants** if we want a generative mode.
 - Multi-select, snapping and a rotate handle on the canvas (single-shape move + resize already work).
 - Save / load a composition as JSON (state currently lives only in the tab).
-- Motion / DJ-visual mode (to be brainstormed).
+- DJ-visual mode: audio-reactive or tempo-synced input, per-parameter LFOs, a canvas/WebGL renderer if SVG gets too slow at wall resolution.

@@ -134,6 +134,7 @@ button.exp { background: #2a2f36; }
 }
 .preview .shape { cursor: move; }
 .preview .handle { cursor: nwse-resize; }
+.preview .handle.h1, .preview .handle.h3 { cursor: nesw-resize; }
 
 .layer.active {
   border-color: var(--accent);
@@ -148,3 +149,7 @@ button:disabled:hover { border-color: var(--line); }
 .addrow.hist { align-items: center; margin: 8px 0 2px; }
 .addrow.hist button { flex: 0 0 auto; }
 .addrow.hist .hint { flex: 1; margin: 0; }
+
+/* ---------- Fullscreen stage (beamer / LED) ---------- */
+.stage:fullscreen { background: #000; padding: 0; }
+.stage:fullscreen .preview svg { max-height: 100vh; max-width: 100vw; box-shadow: none; }

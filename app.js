@@ -24,10 +24,28 @@ const state = {
   base: { angle: 0, line: 16, inverted: false },  // stripe field; gap = line / 2 (derived)
   layers: [],
   selectedId: null,
+  // Animation is a non-destructive overlay on the design: values below are
+  // rates per beat; the running clock lives in `anim` (not in history).
+  animation: { bpm: 120, scroll: 0, drift: 0, flipEvery: 0 },
 };
 
-const ink   = () => (state.invert ? '#ffffff' : '#000000');
-const paper = () => (state.invert ? '#000000' : '#ffffff');
+const anim = { playing: false, beats: 0, last: 0, raf: 0 };
+
+/* Animated view of the design at the current clock (pure: no state mutation) */
+function animated() {
+  const a = state.animation, b = anim.beats;
+  const flip = a.flipEvery > 0 && Math.floor(b / a.flipEvery) % 2 === 1;
+  return {
+    phase: a.scroll * b * state.base.line * 1.5,   // lines/beat -> user units (one period per line)
+    angle: state.base.angle + a.drift * b,
+    invert: state.invert !== flip,
+    layerRotate: (L) => L.rotate + (L.spin || 0) * b,
+  };
+}
+
+let viewInvert = false;   // set per render from animated().invert
+const ink   = () => (viewInvert ? '#ffffff' : '#000000');
+const paper = () => (viewInvert ? '#000000' : '#ffffff');
 
 /* ---------- Defaults ---------- */
 function makeShape(type) {
@@ -43,12 +61,12 @@ function makeShape(type) {
 
 function defaultOp(type) {
   if (type === 'fill')    return { type: 'fill', color: 'paper' };
-  if (type === 'outline') return { type: 'outline', width: 4, dashed: false };
+  if (type === 'outline') return { type: 'outline', width: 4 };
   return { type: 'stripes', angle: (state.base.angle + 90) % 180, line: 0, inverted: false };
 }
 
 function defaultLayer(type) {
-  return { id: nid(), name: cap(type), visible: true, rotate: 0, border: false,
+  return { id: nid(), name: cap(type), visible: true, rotate: 0, spin: 0, border: false,
            shape: makeShape(type), op: defaultOp('stripes') };
 }
 
@@ -61,12 +79,15 @@ function patKey(angle, line, inv) {
          String(line).replace(/[.-]/g, '_') + '_' + (inv ? 1 : 0);
 }
 
+let viewPhase = 0;        // stripe scroll offset (user units), shared by all patterns
+
 function patDef(angle, line, inv) {
   const P = line * 1.5;                       // period = line + gap = x + x/2
   const lc = inv ? paper() : ink();           // line colour
   const bg = inv ? ink() : paper();           // gap colour
+  const ph = viewPhase ? ` translate(0 ${(viewPhase % P).toFixed(3)})` : '';
   return `<pattern id="${patKey(angle, line, inv)}" patternUnits="userSpaceOnUse" `
-       + `width="${P}" height="${P}" patternTransform="rotate(${angle})">`
+       + `width="${P}" height="${P}" patternTransform="rotate(${angle})${ph}">`
        + `<rect width="${P}" height="${P}" fill="${bg}"/>`
        + `<rect width="${P}" height="${line}" fill="${lc}"/>`
        + `</pattern>`;
@@ -109,21 +130,25 @@ function layerAttrs(op, patterns) {
     return `fill="${op.color === 'ink' ? ink() : paper()}"`;
   }
   if (op.type === 'outline') {
-    const dash = op.dashed ? ` stroke-dasharray="${op.width * 2.5} ${op.width * 2}"` : '';
-    return `fill="none" stroke="${ink()}" stroke-width="${op.width}"${dash}`;
+    return `fill="none" stroke="${ink()}" stroke-width="${op.width}"`;
   }
-  // stripes
+  // stripes (layer angles drift together with the base, so relations hold)
   const line = op.line > 0 ? op.line : state.base.line;
-  const key = patKey(op.angle, line, op.inverted);
-  patterns.set(key, patDef(op.angle, line, op.inverted));
+  const angle = r1((op.angle + state.animation.drift * anim.beats) % 360);
+  const key = patKey(angle, line, op.inverted);
+  patterns.set(key, patDef(angle, line, op.inverted));
   return `fill="url(#${key})"`;
 }
 
 function buildSVG(forExport) {
   const { w, h } = state.doc;
+  const view = animated();
+  viewInvert = view.invert;
+  viewPhase = view.phase;
+  const baseAngle = r1(view.angle % 360);
   const patterns = new Map();
-  const baseKey = patKey(state.base.angle, state.base.line, state.base.inverted);
-  patterns.set(baseKey, patDef(state.base.angle, state.base.line, state.base.inverted));
+  const baseKey = patKey(baseAngle, state.base.line, state.base.inverted);
+  patterns.set(baseKey, patDef(baseAngle, state.base.line, state.base.inverted));
 
   let body = `<rect x="0" y="0" width="${w}" height="${h}" fill="${paper()}"/>`
            + `<rect x="0" y="0" width="${w}" height="${h}" fill="url(#${baseKey})"/>`;
@@ -132,7 +157,8 @@ function buildSVG(forExport) {
     if (!L.visible) continue;
     const attrs = layerAttrs(L.op, patterns);
     const [cx, cy] = shapeCenter(L.shape);
-    const tf = L.rotate ? `rotate(${L.rotate} ${cx} ${cy})` : '';
+    const rot = r1(view.layerRotate(L));
+    const tf = rot ? `rotate(${rot} ${cx} ${cy})` : '';
     const border = (L.border && L.op.type !== 'outline')
       ? ` stroke="${ink()}" stroke-width="${state.base.line}" stroke-linejoin="miter"` : '';
     const meta = forExport ? '' : ` class="shape" data-id="${L.id}"`;
@@ -150,9 +176,13 @@ function buildSVG(forExport) {
        + `${size} preserveAspectRatio="xMidYMid meet">${defs}${body}</svg>`;
 }
 
+function paint() {
+  document.getElementById('preview').innerHTML = buildSVG(false);
+}
+
 function renderSVG() {
   if (typeof document === 'undefined') return;
-  document.getElementById('preview').innerHTML = buildSVG(false);
+  paint();
   markDirty();
 }
 
@@ -167,7 +197,8 @@ let undoStack = [], redoStack = [], stable = null, dirtyTimer = null;
 
 function serialize() {
   return JSON.stringify({ doc: state.doc, base: state.base, invert: state.invert,
-                          layers: state.layers, reformatMode: state.reformatMode });
+                          layers: state.layers, reformatMode: state.reformatMode,
+                          animation: state.animation });
 }
 
 function flushHistory() {
@@ -236,6 +267,10 @@ function onKey(e) {
   } else if (mod && e.key.toLowerCase() === 'y') {
     if (typing) return;
     e.preventDefault(); redo();
+  } else if (e.key === ' ' && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && tag !== 'BUTTON') {
+    e.preventDefault(); anim.playing ? pause() : play();
+  } else if ((e.key === 'f' || e.key === 'F') && !mod && !typing && tag !== 'INPUT' && tag !== 'SELECT') {
+    e.preventDefault(); toggleFullscreen();
   } else if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && tag !== 'INPUT' && tag !== 'SELECT') {
     const i = state.layers.findIndex((l) => l.id === state.selectedId);
     if (i < 0) return;
@@ -327,10 +362,7 @@ function opFields(L) {
       [['paper', 'paper — knock-out'], ['ink', 'ink — solid']], (v) => { op.color = v; r(); })];
   }
   if (op.type === 'outline') {
-    return [
-      numField('Stroke', op.width, 1, 80, 1, (v) => { op.width = v; r(); }),
-      checkField('Dashed', op.dashed, (v) => { op.dashed = v; r(); }),
-    ];
+    return [numField('Stroke', op.width, 1, 80, 1, (v) => { op.width = v; r(); })];
   }
   return [
     numField('Angle°', op.angle, 0, 180, 1, (v) => { op.angle = v; r(); }),
@@ -368,6 +400,7 @@ function layerCard(L, i) {
     selectField('Shape', L.shape.type, SHAPES.map((s) => [s, s]), (t) => { L.shape = makeShape(t); renderAll(); }),
     ...shapeFields(L),
     numField('Rotate°', L.rotate, -180, 180, 1, (v) => { L.rotate = v; renderSVG(); }),
+    numField('Spin (°/beat)', L.spin || 0, -90, 90, 0.5, (v) => { L.spin = v; renderSVG(); }),
     selectField('Operation', L.op.type,
       [['stripes', 'stripes'], ['fill', 'fill'], ['outline', 'outline']],
       (t) => { L.op = defaultOp(t); renderAll(); }),
@@ -523,11 +556,13 @@ function renderControls() {
   const wrap = el('div', {});
   state.layers.forEach((L, i) => wrap.append(layerCard(L, i)));
   p.append(section('Layers', [
-    el('p', { class: 'hint' }, 'Drag a shape on the canvas to move it; drag a corner square to resize. Click a shape or layer to select.'),
+    el('p', { class: 'hint' }, 'Drag a shape to move it; drag a corner square to resize (opposite corner stays). Alt: from centre · Shift: keep proportions.'),
     wrap,
     el('div', { class: 'addrow' },
       ...SHAPES.map((t) => btn('+ ' + t, () => { const L = defaultLayer(t); state.layers.push(L); state.selectedId = L.id; renderAll(); }, 'add'))),
   ]));
+
+  p.append(animationSection());
 
   p.append(section('Export', [
     el('div', { class: 'addrow' },
@@ -542,6 +577,64 @@ function refreshDocInfo() {
 }
 
 function renderAll() { renderControls(); renderSVG(); updateHistoryButtons(); }
+
+/* ============================================================
+   Animation — first sketch
+   A beat clock drives rates set in the design (per beat). The design
+   itself never changes while playing, so undo stays clean and any
+   frame can be exported as a still.
+   ============================================================ */
+function tick(now) {
+  if (!anim.playing) return;
+  const dt = (now - anim.last) / 1000;
+  anim.last = now;
+  anim.beats += dt * state.animation.bpm / 60;
+  paint();
+  anim.raf = requestAnimationFrame(tick);
+}
+
+function play() {
+  if (anim.playing) return;
+  anim.playing = true;
+  anim.last = performance.now();
+  anim.raf = requestAnimationFrame(tick);
+  syncPlayButton();
+}
+
+function pause() {
+  anim.playing = false;
+  cancelAnimationFrame(anim.raf);
+  syncPlayButton();
+}
+
+function resetClock() { anim.beats = 0; paint(); }
+
+function syncPlayButton() {
+  const b = document.getElementById('play');
+  if (b) b.textContent = anim.playing ? '❚❚ Pause' : '▶ Play';
+}
+
+function toggleFullscreen() {
+  const st = document.querySelector('.stage');
+  if (document.fullscreenElement) document.exitFullscreen();
+  else st.requestFullscreen();
+}
+
+function animationSection() {
+  const a = state.animation;
+  return section('Animation (sketch)', [
+    el('div', { class: 'addrow' },
+      el('button', { type: 'button', id: 'play', onclick: () => (anim.playing ? pause() : play()) },
+         anim.playing ? '❚❚ Pause' : '▶ Play'),
+      btn('⟲ Reset', resetClock),
+      btn('⛶ Fullscreen', toggleFullscreen)),
+    numField('BPM', a.bpm, 20, 300, 1, (v) => { a.bpm = v; markDirty(); }),
+    numField('Scroll (lines/beat)', a.scroll, -4, 4, 0.05, (v) => { a.scroll = v; paint(); markDirty(); }),
+    numField('Drift (°/beat)', a.drift, -45, 45, 0.5, (v) => { a.drift = v; paint(); markDirty(); }),
+    numField('Flip every N beats', a.flipEvery, 0, 32, 1, (v) => { a.flipEvery = v; paint(); markDirty(); }),
+    el('p', { class: 'hint' }, 'Rates are per beat, so a change of tempo keeps the same feel. Layers get a Spin rate in their card. Space toggles play; F toggles fullscreen.'),
+  ]);
+}
 
 /* ============================================================
    Export
@@ -579,8 +672,10 @@ function loadDefault() {                  // A4 portrait starting canvas (units:
   state.doc = { w: 2100, h: 2970, format: 'A4', landscape: false };
   state.base = { angle: 0, line: 24, inverted: false };   // 2.4 mm line, 1.2 mm gap
   state.invert = false;
+  state.animation = { bpm: 120, scroll: 0, drift: 0, flipEvery: 0 };
+  anim.beats = 0;
   state.layers = [
-    { id: nid(), name: 'Circle', visible: true, rotate: 0, border: true,
+    { id: nid(), name: 'Circle', visible: true, rotate: 0, spin: 0, border: true,
       shape: { type: 'circle', cx: 1050, cy: 1485, r: 700 },
       op: { type: 'stripes', angle: 90, line: 0, inverted: false } },
   ];
@@ -618,10 +713,10 @@ function selectionOverlay() {
   let g = `<g${tf}>`;
   g += `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="none" stroke="${ac}" `
      + `stroke-width="${sw}" stroke-dasharray="${hs} ${hs * 0.6}" pointer-events="none"/>`;
-  for (const [hx, hy] of corners) {
-    g += `<rect class="handle" data-handle="1" x="${hx - hs / 2}" y="${hy - hs / 2}" `
+  corners.forEach(([hx, hy], i) => {
+    g += `<rect class="handle h${i}" data-handle="${i}" x="${hx - hs / 2}" y="${hy - hs / 2}" `
        + `width="${hs}" height="${hs}" fill="#ffffff" stroke="${ac}" stroke-width="${sw}"/>`;
-  }
+  });
   return g + `</g>`;
 }
 
@@ -641,24 +736,59 @@ function translateShape(shape, snap, dx, dy) {
   }
 }
 
-function resizeShape(d, ux, uy) {               // center-anchored, rotation-aware
-  const sh = d.L.shape, [cx, cy] = d.center;
-  const [lx, ly] = toLocal(ux - cx, uy - cy, d.L.rotate);
+function fromLocal(lx, ly, angleDeg) {         // inverse of toLocal
+  const a = (angleDeg || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  return [lx * c - ly * s, lx * s + ly * c];
+}
+
+const UNIFORM = { circle: true, sector: true, polygon: true };   // always keep proportions
+
+/* Resize by dragging a corner handle.
+   Works in the shape's local (unrotated) frame, relative to its centre.
+   Default: the OPPOSITE corner stays put (like any drawing app).
+   Alt / Option: scale from the centre.  Shift: keep proportions (rect, ellipse). */
+function resizeShape(d, ux, uy, mods) {
+  const sh = d.L.shape, snap = d.snap, [cx, cy] = d.center, rot = d.L.rotate;
+  const [lx, ly] = toLocal(ux - cx, uy - cy, rot);
+  const [bx, by, bw, bh] = d.bbox;                    // local bbox at drag start
+  const centered = !!mods.alt;
+  const uniform = UNIFORM[sh.type] || !!mods.shift;
   const MIN = 4;
+
+  // anchor: opposite corner (or centre)
+  const [hx, hy] = d.corner;                          // grabbed corner, local
+  const ax = centered ? 0 : (hx === bx ? bx + bw : bx);
+  const ay = centered ? 0 : (hy === by ? by + bh : by);
+
+  // new extent from anchor to cursor
+  const f = centered ? 2 : 1;
+  let kx = Math.max(MIN, Math.abs(lx - ax) * f) / bw;
+  let ky = Math.max(MIN, Math.abs(ly - ay) * f) / bh;
+  if (uniform) kx = ky = Math.max(kx, ky);
+
+  // scale about the anchor: p' = a + (p - a) * k  ->  centre (0,0) moves to a * (1 - k)
+  const ncx = ax * (1 - kx), ncy = ay * (1 - ky);
+  const [dx, dy] = fromLocal(ncx, ncy, rot);
+  const ncenter = [cx + dx, cy + dy];
+
   switch (sh.type) {
     case 'circle': case 'sector':
-      sh.r = Math.max(MIN, Math.hypot(lx, ly)); break;
+      sh.cx = ncenter[0]; sh.cy = ncenter[1]; sh.r = snap.r * kx; break;
     case 'ellipse':
-      sh.rx = Math.max(MIN, Math.abs(lx)); sh.ry = Math.max(MIN, Math.abs(ly)); break;
+      sh.cx = ncenter[0]; sh.cy = ncenter[1]; sh.rx = snap.rx * kx; sh.ry = snap.ry * ky; break;
     case 'rect': {
-      const w = Math.max(MIN, Math.abs(lx) * 2), h = Math.max(MIN, Math.abs(ly) * 2);
-      sh.w = w; sh.h = h; sh.x = cx - w / 2; sh.y = cy - h / 2; break;
+      const w = snap.w * kx, h = snap.h * ky;
+      sh.w = w; sh.h = h; sh.x = ncenter[0] - w / 2; sh.y = ncenter[1] - h / 2;
+      sh.r = snap.r * Math.min(kx, ky);               // capsule stays a capsule
+      break;
     }
-    case 'polygon': {
-      const r0 = Math.hypot(d.startLocal[0], d.startLocal[1]) || 1;
-      const k = Math.max(0.05, Math.hypot(lx, ly) / r0);
-      sh.points = d.snap.points.map((p) => [cx + (p[0] - cx) * k, cy + (p[1] - cy) * k]); break;
-    }
+    case 'polygon':
+      sh.points = snap.points.map((p) => {
+        const [px, py] = toLocal(p[0] - cx, p[1] - cy, rot);
+        const [qx, qy] = fromLocal(ax + (px - ax) * kx, ay + (py - ay) * ky, rot);
+        return [cx + qx, cy + qy];
+      });
+      break;
   }
 }
 
@@ -675,12 +805,17 @@ function onCanvasDown(e) {
   const sx = state.doc.w / rect.width, sy = state.doc.h / rect.height;
   const [ux, uy] = userCoords(e, rect, sx, sy);
 
-  if (e.target.closest('[data-handle]') && state.selectedId) {
+  const handle = e.target.closest('[data-handle]');
+  if (handle && state.selectedId) {
     const L = state.layers.find((l) => l.id === state.selectedId);
     if (!L) return;
     const center = shapeCenter(L.shape);
-    drag = { mode: 'resize', L, rect, sx, sy, snap: clone(L.shape), center,
-             startLocal: toLocal(ux - center[0], uy - center[1], L.rotate) };
+    const [bx, by, bw, bh] = shapeBBox(L.shape);
+    const bbox = [bx - center[0], by - center[1], bw, bh];      // local frame
+    const i = +handle.getAttribute('data-handle');
+    const corner = [[bbox[0], bbox[1]], [bbox[0] + bw, bbox[1]],
+                    [bbox[0] + bw, bbox[1] + bh], [bbox[0], bbox[1] + bh]][i];
+    drag = { mode: 'resize', L, rect, sx, sy, snap: clone(L.shape), center, bbox, corner };
     e.preventDefault();
     return;
   }
@@ -714,15 +849,23 @@ function applyDrag() {
   if (drag.mode === 'move') {
     translateShape(drag.L.shape, drag.snap, ux - drag.startUser[0], uy - drag.startUser[1]);
   } else {
-    resizeShape(drag, ux, uy);
+    resizeShape(drag, ux, uy, { alt: pendingMouse.altKey, shift: pendingMouse.shiftKey });
   }
   renderSVG();
 }
 
+function roundShape(sh) {
+  for (const k in sh) {
+    if (typeof sh[k] === 'number') sh[k] = r1(sh[k]);
+    else if (k === 'points') sh.points = sh.points.map((p) => [r1(p[0]), r1(p[1])]);
+  }
+}
+
 function onCanvasUp() {
   if (!drag) return;
+  roundShape(drag.L.shape);
   drag = null;
-  renderControls();   // sync the numeric fields with the dragged geometry
+  renderAll();        // sync the numeric fields with the dragged geometry
 }
 
 function scrollActiveIntoView() {
@@ -746,5 +889,5 @@ if (typeof document !== 'undefined') {
   flushHistory();      // seed the stable snapshot; nothing to undo yet
   initCanvas();
 } else if (typeof module !== 'undefined') {
-  module.exports = { state, buildSVG, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
+  module.exports = { state, anim, buildSVG, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
 }

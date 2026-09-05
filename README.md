@@ -44,18 +44,38 @@ A global **Invert** swaps black and white for the whole composition.
 > That's how the "XOR" look (a shape re-filling only the negative area) is made —
 > no boolean engine needed yet.
 
+## Formats
+
+The document has a **format**: `A5` `A4` `A3` `A2` `A1` (portrait or landscape) or
+`IG post 1:1` `IG post 4:5` `IG reel 9:16`. Switching format keeps the
+composition: every layer *and the line width x* are scaled uniformly from the
+centre of the canvas, so an A4 design re-issued as A1 is the same image,
+enlarged.
+
+- Print formats work in **0.1 mm units** (A4 = 2100 × 2970). The panel shows the
+  physical line width, and the SVG export carries real `mm` dimensions.
+- Screen formats work in **px** (Instagram: 1080 wide).
+- When the aspect ratio changes (A4 → 1:1, → 9:16) choose **fit** (everything
+  stays visible, the stripe field extends into the new space) or **fill** (the
+  composition covers the canvas and the edges crop).
+- The **Width / Height** fields only resize the canvas (crop / extend) and switch
+  the document to a *custom* format; they do not rescale the layers.
+
+## Undo
+
+**⌘/Ctrl + Z** undoes, **⇧ ⌘ Z** (or Ctrl + Y) redoes; the buttons at the top of
+the panel do the same. A slider drag or a canvas drag counts as one step.
+**Delete** removes the selected layer.
+
 ### On the canvas
 Click a shape (or its layer) to select it, **drag** to move, and drag a **corner
 handle** to resize (center-anchored, rotation-aware). The numeric fields sync when
 you release. Selection handles never appear in the exported SVG.
 
-## Presets
-Four buttons reproduce the reference mechanisms to start from:
-**Dome + triangle** (orientation shift + knock-out), **Focus capsules**
-(orientation contrast), **Diagonal cut** (knock-out + re-fill), **Disc** (solid).
-
 ## Export
-**SVG** (vector, print-ready) and **PNG** (2×).
+**SVG** (vector; print formats carry their size in mm) and **PNG** at the format's
+native size: 300 dpi for print (A4 = 2480 × 3508 px, A1 = 7016 × 9933 px),
+1080 px wide for Instagram, 2× for a custom canvas.
 
 ## Live preview (GitHub Pages)
 
@@ -71,3 +91,5 @@ Actions*. The site then publishes at `https://studiostudiobe.github.io/volatile/
 - Typography layer; multi-page / spread guides.
 - **Randomise / generate variants** if we want a generative mode.
 - Multi-select, snapping and a rotate handle on the canvas (single-shape move + resize already work).
+- Save / load a composition as JSON (state currently lives only in the tab).
+- Motion / DJ-visual mode (to be brainstormed).

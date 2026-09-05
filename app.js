@@ -18,7 +18,8 @@ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /* ---------- State ---------- */
 const state = {
-  doc: { w: 1414, h: 2000 },     // default: poster (A-series portrait)
+  doc: { w: 2100, h: 2970, format: 'A4', landscape: false },  // units: 0.1 mm (print) or px (screen)
+  reformatMode: 'fit',           // on format change: 'fit' keeps everything, 'fill' crops
   invert: false,                 // global black/white swap
   base: { angle: 0, line: 16, inverted: false },  // stripe field; gap = line / 2 (derived)
   layers: [],
@@ -141,13 +142,106 @@ function buildSVG(forExport) {
   if (!forExport && state.selectedId) body += selectionOverlay();
 
   const defs = `<defs>${[...patterns.values()].join('')}</defs>`;
+  const f = currentFormat();
+  const size = (forExport && f && f.mm)
+    ? `width="${w / 10}mm" height="${h / 10}mm"`      // print-ready physical size
+    : `width="${w}" height="${h}"`;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" `
-       + `width="${w}" height="${h}" preserveAspectRatio="xMidYMid meet">${defs}${body}</svg>`;
+       + `${size} preserveAspectRatio="xMidYMid meet">${defs}${body}</svg>`;
 }
 
 function renderSVG() {
   if (typeof document === 'undefined') return;
   document.getElementById('preview').innerHTML = buildSVG(false);
+  markDirty();
+}
+
+/* ============================================================
+   History — undo / redo
+   Snapshot-based: every render marks the document dirty; after a short
+   pause the previous stable snapshot is pushed. Slider drags and canvas
+   drags therefore collapse into one undo step.
+   ============================================================ */
+const HISTORY_MAX = 100;
+let undoStack = [], redoStack = [], stable = null, dirtyTimer = null;
+
+function serialize() {
+  return JSON.stringify({ doc: state.doc, base: state.base, invert: state.invert,
+                          layers: state.layers, reformatMode: state.reformatMode });
+}
+
+function flushHistory() {
+  if (dirtyTimer) { clearTimeout(dirtyTimer); dirtyTimer = null; }
+  const cur = serialize();
+  if (stable === null) stable = cur;
+  else if (cur !== stable) {
+    undoStack.push(stable);
+    if (undoStack.length > HISTORY_MAX) undoStack.shift();
+    redoStack = [];
+    stable = cur;
+  }
+  updateHistoryButtons();
+}
+
+function markDirty() {
+  if (dirtyTimer) clearTimeout(dirtyTimer);
+  dirtyTimer = setTimeout(flushHistory, 400);
+}
+
+function restore(json) {
+  Object.assign(state, JSON.parse(json));
+  stable = json;
+  if (!state.layers.some((l) => l.id === state.selectedId)) state.selectedId = null;
+  renderAll();
+}
+
+function undo() {
+  flushHistory();
+  if (!undoStack.length) return;
+  redoStack.push(stable);
+  restore(undoStack.pop());
+  updateHistoryButtons();
+}
+
+function redo() {
+  flushHistory();
+  if (!redoStack.length) return;
+  undoStack.push(stable);
+  restore(redoStack.pop());
+  updateHistoryButtons();
+}
+
+function updateHistoryButtons() {
+  if (typeof document === 'undefined') return;
+  const u = document.getElementById('undo'), r = document.getElementById('redo');
+  if (u) u.disabled = !undoStack.length && serialize() === stable;
+  if (r) r.disabled = !redoStack.length;
+}
+
+function historyRow() {
+  return el('div', { class: 'addrow hist' },
+    el('button', { type: 'button', id: 'undo', class: 'mini', onclick: undo }, '↶ Undo'),
+    el('button', { type: 'button', id: 'redo', class: 'mini', onclick: redo }, '↷ Redo'),
+    el('span', { class: 'hint' }, '⌘/Ctrl+Z · ⇧⌘Z · Delete removes the selected layer'));
+}
+
+function onKey(e) {
+  const t = e.target, tag = t && t.tagName;
+  const typing = tag === 'TEXTAREA' || (tag === 'INPUT' && t.type === 'text');
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key.toLowerCase() === 'z') {
+    if (typing) return;                     // let the field handle its own text undo
+    e.preventDefault();
+    e.shiftKey ? redo() : undo();
+  } else if (mod && e.key.toLowerCase() === 'y') {
+    if (typing) return;
+    e.preventDefault(); redo();
+  } else if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && tag !== 'INPUT' && tag !== 'SELECT') {
+    const i = state.layers.findIndex((l) => l.id === state.selectedId);
+    if (i < 0) return;
+    e.preventDefault();
+    state.layers.splice(i, 1); state.selectedId = null; renderAll();
+  }
 }
 
 /* ============================================================
@@ -256,7 +350,7 @@ function move(i, d) {
 
 function layerCard(L, i) {
   const head = el('div', { class: 'lhead' },
-    el('input', { type: 'text', class: 'lname', value: L.name, oninput: (e) => { L.name = e.target.value; } }),
+    el('input', { type: 'text', class: 'lname', value: L.name, oninput: (e) => { L.name = e.target.value; markDirty(); } }),
     btn('▲', () => move(i, -1), 'mini'),
     btn('▼', () => move(i, 1), 'mini'),
     btn('⧉', () => { const c = JSON.parse(JSON.stringify(L)); c.id = nid(); state.layers.splice(i + 1, 0, c); state.selectedId = c.id; renderAll(); }, 'mini'),
@@ -282,25 +376,140 @@ function layerCard(L, i) {
   );
 }
 
-/* ---------- Document size presets ---------- */
-function sizeRow() {
-  const sizes = [['Spread', 2000, 1333], ['Poster', 1414, 2000], ['Square', 1600, 1600], ['Wide', 2000, 1000]];
-  return el('div', { class: 'addrow' },
-    ...sizes.map((s) => btn(s[0], () => { state.doc.w = s[1]; state.doc.h = s[2]; renderAll(); }, 'sz')));
+/* ============================================================
+   Formats — switching formats keeps the composition
+   ============================================================ */
+/* Print formats live in 0.1 mm units (A4 = 2100 x 2970), screen formats in px.
+   Portrait dimensions are stored; landscape swaps them. */
+const FORMATS = [
+  { id: 'A5', label: 'A5', mm: [148, 210] },
+  { id: 'A4', label: 'A4', mm: [210, 297] },
+  { id: 'A3', label: 'A3', mm: [297, 420] },
+  { id: 'A2', label: 'A2', mm: [420, 594] },
+  { id: 'A1', label: 'A1', mm: [594, 841] },
+  { id: 'ig-post', label: 'IG post 1:1', px: [1080, 1080] },
+  { id: 'ig-post-45', label: 'IG post 4:5', px: [1080, 1350] },
+  { id: 'ig-reel', label: 'IG reel 9:16', px: [1080, 1920] },
+];
+const PRINT_DPI = 300;
+
+const formatById = (id) => FORMATS.find((f) => f.id === id) || null;
+const currentFormat = () => formatById(state.doc.format);
+
+function formatUnits(f, landscape) {
+  let [w, h] = f.mm ? [f.mm[0] * 10, f.mm[1] * 10] : f.px;
+  if (landscape) [w, h] = [h, w];
+  return [w, h];
 }
+
+const r1 = (v) => Math.round(v * 10) / 10;
+
+/* Scale the whole composition (geometry AND line widths) from the old canvas
+   into the new one, anchored at the centre. 'fit' = contain, 'fill' = cover. */
+function reformat(w1, h1) {
+  const w0 = state.doc.w, h0 = state.doc.h;
+  if (w0 === w1 && h0 === h1) return;
+  const s = state.reformatMode === 'fill'
+    ? Math.max(w1 / w0, h1 / h0)
+    : Math.min(w1 / w0, h1 / h0);
+  const X = (x) => r1((x - w0 / 2) * s + w1 / 2);
+  const Y = (y) => r1((y - h0 / 2) * s + h1 / 2);
+  const S = (v) => r1(v * s);
+
+  for (const L of state.layers) {
+    const sh = L.shape;
+    switch (sh.type) {
+      case 'circle': case 'sector':
+        sh.cx = X(sh.cx); sh.cy = Y(sh.cy); sh.r = S(sh.r); break;
+      case 'ellipse':
+        sh.cx = X(sh.cx); sh.cy = Y(sh.cy); sh.rx = S(sh.rx); sh.ry = S(sh.ry); break;
+      case 'rect':
+        sh.x = X(sh.x); sh.y = Y(sh.y); sh.w = S(sh.w); sh.h = S(sh.h); sh.r = S(sh.r); break;
+      case 'polygon':
+        sh.points = sh.points.map((p) => [X(p[0]), Y(p[1])]); break;
+    }
+    if (L.op.type === 'stripes' && L.op.line > 0) L.op.line = S(L.op.line);
+    if (L.op.type === 'outline') L.op.width = Math.max(0.5, S(L.op.width));
+  }
+  state.base.line = Math.max(0.5, S(state.base.line));
+  state.doc.w = w1;
+  state.doc.h = h1;
+}
+
+function setFormat(id, landscape) {
+  const f = formatById(id);
+  if (!f) return;
+  const [w, h] = formatUnits(f, landscape);
+  reformat(w, h);
+  state.doc.format = id;
+  state.doc.landscape = !!landscape;
+  renderAll();
+}
+
+/* Physical / export description of the current document */
+function docInfo() {
+  const f = currentFormat();
+  const { w, h } = state.doc;
+  if (f && f.mm) {
+    const [mw, mh] = [w / 10, h / 10];
+    const [pw, ph] = exportPixels();
+    return `${mw} × ${mh} mm · 1 unit = 0.1 mm · PNG ${pw} × ${ph} px @ ${PRINT_DPI} dpi`;
+  }
+  if (f) return `${w} × ${h} px`;
+  return `custom · ${w} × ${h} units · PNG at 2×`;
+}
+
+function exportPixels() {
+  const f = currentFormat();
+  const { w, h } = state.doc;
+  if (f && f.mm) return [Math.round(w / 10 / 25.4 * PRINT_DPI), Math.round(h / 10 / 25.4 * PRINT_DPI)];
+  if (f) return [w, h];
+  return [w * 2, h * 2];
+}
+
+function exportName(ext) {
+  const f = currentFormat();
+  const tag = f ? f.id + (state.doc.landscape ? '-landscape' : '') : 'custom';
+  return `linework-${tag}.${ext}`;
+}
+
+/* ---------- Document / format controls ---------- */
+function formatRow() {
+  return el('div', { class: 'addrow fmt' },
+    ...FORMATS.map((f) => btn(f.label, () => setFormat(f.id, state.doc.landscape),
+      'sz' + (f.id === state.doc.format ? ' active' : ''))));
+}
+
 
 /* ============================================================
    Control panel
    ============================================================ */
+function lineInfo() {
+  const f = currentFormat();
+  if (!f || !f.mm) return '';
+  return ` Line x = ${r1(state.base.line / 10)} mm, gap ${r1(state.base.line / 20)} mm.`;
+}
+
 function renderControls() {
   if (typeof document === 'undefined') return;
   const p = document.getElementById('panel');
   p.innerHTML = '';
+  p.append(historyRow());
 
+  const custom = (k) => (v) => { state.doc[k] = v; state.doc.format = null; renderSVG(); refreshDocInfo(); };
   p.append(section('Document', [
-    numField('Width', state.doc.w, 100, 6000, 10, (v) => { state.doc.w = v; renderSVG(); }),
-    numField('Height', state.doc.h, 100, 6000, 10, (v) => { state.doc.h = v; renderSVG(); }),
-    sizeRow(),
+    formatRow(),
+    checkField('Landscape', state.doc.landscape, (v) => {
+      if (state.doc.format) setFormat(state.doc.format, v);
+      else { reformat(state.doc.h, state.doc.w); state.doc.landscape = v; renderAll(); }
+    }),
+    selectField('On format change', state.reformatMode,
+      [['fit', 'fit (keep all, field extends)'], ['fill', 'fill (cover, crop edges)']],
+      (v) => { state.reformatMode = v; }),
+    el('p', { class: 'hint', id: 'docinfo' }, docInfo()),
+    el('p', { class: 'hint' }, 'Formats rescale the whole composition (incl. line width). Width / height below only resize the canvas (custom format).'),
+    numField('Width', state.doc.w, 100, 10000, 10, custom('w')),
+    numField('Height', state.doc.h, 100, 10000, 10, custom('h')),
     checkField('Invert whole image', state.invert, (v) => { state.invert = v; renderSVG(); }),
   ]));
 
@@ -308,7 +517,7 @@ function renderControls() {
     numField('Angle°', state.base.angle, 0, 180, 1, (v) => { state.base.angle = v; renderSVG(); }),
     numField('Line width x', state.base.line, 1, 240, 1, (v) => { state.base.line = v; renderSVG(); }),
     checkField('Inverted (white-dominant)', state.base.inverted, (v) => { state.base.inverted = v; renderSVG(); }),
-    el('p', { class: 'hint' }, 'Gap is locked to x / 2.'),
+    el('p', { class: 'hint' }, 'Gap is locked to x / 2.' + lineInfo()),
   ]));
 
   const wrap = el('div', {});
@@ -320,22 +529,19 @@ function renderControls() {
       ...SHAPES.map((t) => btn('+ ' + t, () => { const L = defaultLayer(t); state.layers.push(L); state.selectedId = L.id; renderAll(); }, 'add'))),
   ]));
 
-  p.append(section('Presets', [
-    el('div', { class: 'addrow' },
-      btn('Dome + triangle', () => loadPreset('dome'), 'preset'),
-      btn('Focus capsules', () => loadPreset('focus'), 'preset'),
-      btn('Diagonal cut', () => loadPreset('diag'), 'preset'),
-      btn('Disc', () => loadPreset('disc'), 'preset')),
-  ]));
-
   p.append(section('Export', [
     el('div', { class: 'addrow' },
       btn('Download SVG', exportSVG, 'exp'),
-      btn('Download PNG', () => exportPNG(2), 'exp')),
+      btn('Download PNG', exportPNG, 'exp')),
   ]));
 }
 
-function renderAll() { renderControls(); renderSVG(); }
+function refreshDocInfo() {
+  const d = document.getElementById('docinfo');
+  if (d) d.textContent = docInfo();
+}
+
+function renderAll() { renderControls(); renderSVG(); updateHistoryButtons(); }
 
 /* ============================================================
    Export
@@ -349,80 +555,33 @@ function download(blob, name) {
 }
 
 function exportSVG() {
-  download(new Blob([buildSVG(true)], { type: 'image/svg+xml' }), 'linework.svg');
+  download(new Blob([buildSVG(true)], { type: 'image/svg+xml' }), exportName('svg'));
 }
 
-function exportPNG(scale) {
+/* PNG at the format's native size: 300 dpi for print formats, 1x for screen
+   formats (1080 px Instagram), 2x for a custom canvas. */
+function exportPNG() {
+  const [pw, ph] = exportPixels();
   const url = URL.createObjectURL(new Blob([buildSVG(true)], { type: 'image/svg+xml' }));
   const img = new Image();
   img.onload = () => {
     const c = document.createElement('canvas');
-    c.width = state.doc.w * scale;
-    c.height = state.doc.h * scale;
+    c.width = pw;
+    c.height = ph;
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
     URL.revokeObjectURL(url);
-    c.toBlob((b) => download(b, 'linework.png'));
+    c.toBlob((b) => download(b, exportName('png')));
   };
   img.src = url;
 }
 
-/* ============================================================
-   Presets — reproduce the reference mechanisms
-   ============================================================ */
-function loadPreset(name) {
-  if (name === 'dome') {
-    state.doc = { w: 2000, h: 1000 };
-    state.base = { angle: 0, line: 16 };
-    state.invert = false;
-    state.layers = [
-      { id: nid(), name: 'Triangle (vertical)', visible: true, rotate: 0, border: true,
-        shape: { type: 'polygon', points: [[1075, 120], [1075, 900], [1900, 900]] },
-        op: { type: 'stripes', angle: 90, line: 0, inverted: false } },
-      { id: nid(), name: 'Dome (knock-out)', visible: true, rotate: -44, border: true,
-        shape: { type: 'sector', cx: 1500, cy: 430, r: 330, a0: 180, a1: 360 },
-        op: { type: 'fill', color: 'paper' } },
-    ];
-  } else if (name === 'focus') {
-    state.doc = { w: 2000, h: 1333 };
-    state.base = { angle: 90, line: 14 };
-    state.invert = false;
-    state.layers = [560, 1000, 1440].map((cx, i) => ({
-      id: nid(), name: 'Capsule ' + (i + 1), visible: true, rotate: 0, border: true,
-      shape: { type: 'rect', x: cx - 150, y: 170, w: 300, h: 1060, r: 150 },
-      op: { type: 'stripes', angle: 0, line: 0, inverted: false },
-    }));
-  } else if (name === 'diag') {
-    state.doc = { w: 1414, h: 2000 };
-    state.base = { angle: 45, line: 10, inverted: true };  // white-dominant field
-    state.invert = false;
-    state.layers = [
-      { id: nid(), name: 'Polygon (knock-out)', visible: true, rotate: 0,
-        shape: { type: 'polygon', points: [[180, 230], [560, 230], [900, 760], [900, 1770], [520, 1770], [180, 1240]] },
-        op: { type: 'fill', color: 'paper' } },
-      { id: nid(), name: 'Circle (re-fill)', visible: true, rotate: 0,
-        shape: { type: 'circle', cx: 560, cy: 1000, r: 300 },
-        op: { type: 'stripes', angle: 45, line: 0, inverted: true } },  // matches base → only shows over the knock-out
-    ];
-  } else if (name === 'disc') {
-    state.doc = { w: 2000, h: 1400 };
-    state.base = { angle: 0, line: 12 };
-    state.invert = false;
-    state.layers = [
-      { id: nid(), name: 'Disc (solid)', visible: true, rotate: 0,
-        shape: { type: 'circle', cx: 1000, cy: 700, r: 520 },
-        op: { type: 'fill', color: 'ink' } },
-    ];
-  }
-  renderAll();
-}
-
-function loadDefault() {                  // poster-format starting canvas
-  state.doc = { w: 1414, h: 2000 };
-  state.base = { angle: 0, line: 16, inverted: false };
+function loadDefault() {                  // A4 portrait starting canvas (units: 0.1 mm)
+  state.doc = { w: 2100, h: 2970, format: 'A4', landscape: false };
+  state.base = { angle: 0, line: 24, inverted: false };   // 2.4 mm line, 1.2 mm gap
   state.invert = false;
   state.layers = [
     { id: nid(), name: 'Circle', visible: true, rotate: 0, border: true,
-      shape: { type: 'circle', cx: 707, cy: 1000, r: 470 },
+      shape: { type: 'circle', cx: 1050, cy: 1485, r: 700 },
       op: { type: 'stripes', angle: 90, line: 0, inverted: false } },
   ];
   state.selectedId = null;
@@ -575,12 +734,17 @@ function initCanvas() {
   document.getElementById('preview').addEventListener('pointerdown', onCanvasDown);
   window.addEventListener('pointermove', onCanvasMove);
   window.addEventListener('pointerup', onCanvasUp);
+  window.addEventListener('keydown', onKey);
+  // A new click starts a new action: commit whatever the previous one left pending,
+  // so two quick button presses become two undo steps.
+  window.addEventListener('pointerdown', () => flushHistory(), true);
 }
 
 /* ---------- Boot ---------- */
 if (typeof document !== 'undefined') {
   loadDefault();
+  flushHistory();      // seed the stable snapshot; nothing to undo yet
   initCanvas();
 } else if (typeof module !== 'undefined') {
-  module.exports = { state, buildSVG, loadPreset };  // for headless rendering / tests
+  module.exports = { state, buildSVG, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
 }

@@ -109,7 +109,7 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
 
 .addrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .addrow button { flex: 1 1 auto; }
-button.preset, button.exp { background: #2a2f36; }
+button.exp { background: #2a2f36; }
 
 /* ---------- Stage ---------- */
 .stage {
@@ -139,3 +139,12 @@ button.preset, button.exp { background: #2a2f36; }
   border-color: var(--accent);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
+
+/* ---------- Formats / history ---------- */
+.addrow.fmt button { flex: 1 1 30%; }
+button.sz.active { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: .4; cursor: default; }
+button:disabled:hover { border-color: var(--line); }
+.addrow.hist { align-items: center; margin: 8px 0 2px; }
+.addrow.hist button { flex: 0 0 auto; }
+.addrow.hist .hint { flex: 1; margin: 0; }

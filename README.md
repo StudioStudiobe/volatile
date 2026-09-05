@@ -48,6 +48,14 @@ A global **Invert** swaps black and white for the whole composition.
 > That's how the "XOR" look (a shape re-filling only the negative area) is made —
 > no boolean engine needed yet.
 
+## Grid
+
+Static → Grid: a modular grid of **columns** across the width inside a
+**margin**; **rows** = 0 gives square cells. While dragging, a shape's edges
+and centre **snap** to the lines; while resizing, the cursor does. Hold
+⌘/Ctrl to ignore the grid, press **G** to show or hide it. The grid is an
+editing aid and never appears in exports.
+
 ## Formats
 
 The document has a **format**: print `A5` `A4` `A3` `A2` `A1` (portrait or
@@ -151,6 +159,6 @@ Actions*. The site then publishes at `https://studiostudiobe.github.io/volatile/
 - Curved stripe fields (the wrapping/contour effect).
 - Typography layer; multi-page / spread guides.
 - **Randomise / generate variants** if we want a generative mode.
-- Multi-select, snapping and a rotate handle on the canvas (single-shape move + resize already work).
+- Multi-select and a rotate handle on the canvas (single-shape move, resize and grid snapping already work).
 - Save / load a composition as JSON (state currently lives only in the tab).
 - DJ-visual mode: audio-reactive or tempo-synced input, per-parameter LFOs, a canvas/WebGL renderer if SVG gets too slow at wall resolution.

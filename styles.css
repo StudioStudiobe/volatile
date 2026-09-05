@@ -118,6 +118,7 @@ button.danger:hover { border-color: var(--danger); color: var(--danger); }
 
 .addrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .addrow button { flex: 1 1 auto; }
+.addrow label.row { flex: 1 1 40%; margin: 0; }
 button.exp { background: #2a2f36; }
 
 /* ---------- Stage ---------- */

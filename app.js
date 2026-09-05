@@ -29,6 +29,7 @@ const state = {
   animation: { bpm: 120, scroll: 0, drift: 0, flipEvery: 0, loopBeats: 8, audioGain: 1 },
   scenes: [],                    // saved snapshots of design + motion, played in order
   sequence: { loop: true },
+  grid: { show: true, snap: true, cols: 12, rows: 0, margin: 0 },   // editing aid, never exported
 };
 
 const seq = { playing: false, index: -1 };   // sequence playback (runtime, not in history)
@@ -221,6 +222,7 @@ function buildSVG(forExport) {
     body += shapeMarkup(shape, attrs + border + meta, tf);
   }
 
+  if (!forExport && state.grid && state.grid.show) body += gridOverlay();
   if (!forExport && state.selectedId) body += selectionOverlay();
 
   const defs = `<defs>${[...patterns.values()].join('')}</defs>`;
@@ -254,7 +256,8 @@ let undoStack = [], redoStack = [], stable = null, dirtyTimer = null;
 function serialize() {
   return JSON.stringify({ doc: state.doc, base: state.base, invert: state.invert,
                           layers: state.layers, reformatMode: state.reformatMode,
-                          animation: state.animation, scenes: state.scenes, sequence: state.sequence });
+                          animation: state.animation, scenes: state.scenes, sequence: state.sequence,
+                          grid: state.grid });
 }
 
 function flushHistory() {
@@ -333,6 +336,8 @@ function onKey(e) {
     e.preventDefault(); anim.playing ? pause() : play();
   } else if ((e.key === 'f' || e.key === 'F') && !mod && !typing && tag !== 'INPUT' && tag !== 'SELECT') {
     e.preventDefault(); toggleFullscreen();
+  } else if ((e.key === 'g' || e.key === 'G') && !mod && !typing && tag !== 'INPUT' && tag !== 'SELECT') {
+    e.preventDefault(); state.grid.show = !state.grid.show; renderAll();
   } else if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && tag !== 'INPUT' && tag !== 'SELECT') {
     const i = state.layers.findIndex((l) => l.id === state.selectedId);
     if (i < 0) return;
@@ -677,6 +682,7 @@ function fillPanel(p, tab) {
   }
 
   p.append(formatSection(true));
+  p.append(gridSection());
 
   p.append(section('Base field', [
     numField('Angle°', state.base.angle, 0, 180, 1, (v) => { state.base.angle = v; renderSVG(); }),
@@ -1119,6 +1125,7 @@ function loadDefault() {                  // A4 portrait starting canvas (units:
   state.animation = { bpm: 120, scroll: 0, drift: 0, flipEvery: 0, loopBeats: 8, audioGain: 1 };
   state.scenes = [];
   state.sequence = { loop: true };
+  state.grid = { show: true, snap: true, cols: 12, rows: 0, margin: 0 };
   anim.beats = 0;
   state.layers = [
     { id: nid(), name: 'Circle', visible: true, rotate: 0, spin: 0,
@@ -1129,6 +1136,77 @@ function loadDefault() {                  // A4 portrait starting canvas (units:
   ];
   state.selectedId = null;
   renderAll();
+}
+
+/* ============================================================
+   Grid — modular grid for placing and snapping
+   cols across the width inside the margin; rows = 0 gives square cells.
+   ============================================================ */
+function gridLines() {
+  const g = state.grid, { w, h } = state.doc;
+  const m = Math.max(0, Math.min(g.margin || 0, Math.min(w, h) / 2 - 1));
+  const cols = Math.max(1, Math.round(g.cols) || 1);
+  const cw = (w - 2 * m) / cols;
+  const rows = g.rows > 0 ? Math.round(g.rows) : Math.max(1, Math.floor((h - 2 * m) / cw + 1e-6));
+  const rh = g.rows > 0 ? (h - 2 * m) / rows : cw;
+  const xs = [], ys = [];
+  for (let i = 0; i <= cols; i++) xs.push(m + i * cw);
+  for (let j = 0; j <= rows; j++) ys.push(m + j * rh);
+  if (Math.abs(ys[ys.length - 1] - (h - m)) > 1e-6) ys.push(h - m);    // bottom margin is a snap target too
+  return { xs, ys, m, cw, rh, cols, rows };
+}
+
+function gridOverlay() {
+  const { xs, ys, m } = gridLines();
+  const { w, h } = state.doc;
+  const sw = Math.max(w, h) / 1500, c = '#3b82f6';
+  let g = `<g class="grid" pointer-events="none" stroke="${c}" stroke-width="${sw}" fill="none">`;
+  for (const x of xs) g += `<line x1="${x}" y1="${m}" x2="${x}" y2="${h - m}" opacity=".35"/>`;
+  for (const y of ys) g += `<line x1="${m}" y1="${y}" x2="${w - m}" y2="${y}" opacity=".35"/>`;
+  if (m > 0) g += `<rect x="${m}" y="${m}" width="${w - 2 * m}" height="${h - 2 * m}" opacity=".8"/>`;
+  return g + '</g>';
+}
+
+/* nearest grid line to v within thr, else null */
+function snapTo(v, lines, thr) {
+  let best = null, bd = thr;
+  for (const l of lines) { const d = Math.abs(v - l); if (d < bd) { bd = d; best = l; } }
+  return best;
+}
+
+/* Snap a moved shape: its bbox edges and centre against the grid.
+   Returns the [dx, dy] correction to apply (0 when nothing is close). */
+function snapMoveDelta(shape, rotated, thr) {
+  const { xs, ys } = gridLines();
+  const [bx, by, bw, bh] = shapeBBox(shape);
+  const cx = bx + bw / 2, cy = by + bh / 2;
+  const candX = rotated ? [cx] : [bx, cx, bx + bw];
+  const candY = rotated ? [cy] : [by, cy, by + bh];
+  const pick = (cands, lines) => {
+    let best = 0, bd = thr;
+    for (const c of cands) { const s = snapTo(c, lines, thr); if (s !== null && Math.abs(s - c) < bd) { bd = Math.abs(s - c); best = s - c; } }
+    return best;
+  };
+  return [pick(candX, xs), pick(candY, ys)];
+}
+
+function snapPoint(ux, uy, thr) {
+  const { xs, ys } = gridLines();
+  const sx = snapTo(ux, xs, thr), sy = snapTo(uy, ys, thr);
+  return [sx === null ? ux : sx, sy === null ? uy : sy];
+}
+
+function gridSection() {
+  const g = state.grid, M = Math.min(state.doc.w, state.doc.h) / 4;
+  return section('Grid', [
+    el('div', { class: 'addrow' },
+      checkField('Show', g.show, (v) => { g.show = v; renderSVG(); }),
+      checkField('Snap', g.snap, (v) => { g.snap = v; markDirty(); })),
+    numField('Columns', g.cols, 1, 48, 1, (v) => { g.cols = v; renderSVG(); }),
+    numField('Rows (0 = square)', g.rows, 0, 64, 1, (v) => { g.rows = v; renderSVG(); }),
+    numField('Margin', g.margin, 0, Math.round(M), 1, (v) => { g.margin = v; renderSVG(); }),
+    el('p', { class: 'hint' }, 'Edges and centre snap while dragging, the cursor while resizing. Hold ⌘/Ctrl to ignore the grid. G toggles it. Never exported.'),
+  ]);
 }
 
 /* ============================================================
@@ -1293,10 +1371,18 @@ function onCanvasMove(e) {
 function applyDrag() {
   rafQueued = false;
   if (!drag || !pendingMouse) return;
-  const [ux, uy] = userCoords(pendingMouse, drag.rect, drag.sx, drag.sy);
+  let [ux, uy] = userCoords(pendingMouse, drag.rect, drag.sx, drag.sy);
+  const snapping = state.grid.snap && !(pendingMouse.metaKey || pendingMouse.ctrlKey);
+  const thr = 8 * drag.sx;                              // 8 screen px
   if (drag.mode === 'move') {
-    translateShape(drag.L.shape, drag.snap, ux - drag.startUser[0], uy - drag.startUser[1]);
+    const dx = ux - drag.startUser[0], dy = uy - drag.startUser[1];
+    translateShape(drag.L.shape, drag.snap, dx, dy);
+    if (snapping) {
+      const [ax, ay] = snapMoveDelta(drag.L.shape, !!drag.L.rotate, thr);
+      if (ax || ay) translateShape(drag.L.shape, drag.snap, dx + ax, dy + ay);
+    }
   } else {
+    if (snapping) [ux, uy] = snapPoint(ux, uy, thr);
     resizeShape(drag, ux, uy, { alt: pendingMouse.altKey, shift: pendingMouse.shiftKey });
   }
   renderSVG();
@@ -1337,5 +1423,5 @@ if (typeof document !== 'undefined') {
   flushHistory();      // seed the stable snapshot; nothing to undo yet
   initCanvas();
 } else if (typeof module !== 'undefined') {
-  module.exports = { state, anim, audio, seq, buildSVG, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
+  module.exports = { state, anim, audio, seq, buildSVG, gridLines, snapMoveDelta, snapPoint, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
 }

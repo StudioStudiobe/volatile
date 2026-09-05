@@ -109,6 +109,15 @@ to a band: its size then follows that level between Small and Large instead of
 the clock (quiet = Small, loud = Large). Recordings include the sound when a
 source is active.
 
+## Timeline
+
+Under the canvas: the timeline of the scene loaded in the editor (or of the
+loop length when no scene is loaded). A beat ruler, a playhead, and one bar
+per layer from its **in** to its **out** point. Drag the bar to move it, its
+edges to set in / out (quarter-beat steps); outside the bar the layer is
+hidden. Click or drag on the ruler to jump. The clock wraps at the scene
+length, so the playhead loops.
+
 ## Sequence
 
 A **scene** is a snapshot of the whole design plus its motion settings, with a
@@ -116,7 +125,9 @@ length in beats. Build a look in Static and Motion, then *Add scene from
 editor*; *Load into editor* brings a scene back to tweak it, *Update from
 editor* saves the tweak. **Play sequence** plays the scenes in order with hard
 cuts (optionally looping); **Record sequence** captures all scenes once as a
-video. Scene loads during playback are not undo steps.
+video. Scene loads during playback are not undo steps. **Download sequence**
+saves all scenes as one JSON file; **Upload sequence…** loads such a file,
+replacing or appending the current scenes.
 
 ## Animation (first sketch)
 
@@ -124,9 +135,12 @@ A beat clock drives rates that live in the design, so the design itself never
 changes while playing (undo stays clean, any frame exports as a still):
 
 - **BPM** — tempo; all rates are *per beat*, so changing tempo keeps the feel.
-- **Scroll** — stripes travel along their normal (lines per beat). Shared by every
-  pattern, so base and layers stay in phase.
-- **Drift** — base angle rotates (°/beat); layer stripe angles drift along with it.
+- **Base field** (Motion → Base field): **Scroll** (stripes travel along their
+  normal, lines per beat, shared by every pattern so base and layers stay in
+  phase), **Drift** (°/beat), **Line width** between Small and Large (% of x,
+  clock or sound; layers inheriting x follow, borders too) and **Swing** of the
+  angle from the base angle to an end angle (travel, return, ease, or sound).
+  Layer stripe angles turn along with the base.
 - **Flip every N beats** — global black/white inversion on a beat grid.
 - **Spin** (per layer) — *continuous* (°/beat), *step* (a hard turn of N° every
   N beats) or *punch* (the same turn, but fast and eased right on the beat).

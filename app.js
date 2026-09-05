@@ -53,13 +53,56 @@ function toggleSetup() {
   renderControls();
 }
 
+/* ---------- Motion curves (shared by layers and the base field) ----------
+   cycleF: 1 on the beat, back to 0 over the period (smooth / snap / punch).
+   travelF: 0 = start, 1 = end, over `period` beats; return: pingpong / jump / hold. */
+function cycleF(b, period, off, mode) {
+  const u = (((b - (off || 0)) / (period || 1)) % 1 + 1) % 1;
+  switch (mode) {
+    case 'snap':  return u < 0.5 ? 1 : 0;
+    case 'punch': return (1 - u) * (1 - u);
+    default:      return (1 + Math.cos(2 * Math.PI * u)) / 2;
+  }
+}
+
+function travelF(b, period, off, mode, ease) {
+  const u = (b - (off || 0)) / (period || 4);
+  let f;
+  switch (mode) {
+    case 'jump': f = u < 0 ? 0 : u % 1; break;
+    case 'hold': f = Math.min(1, Math.max(0, u)); break;
+    default: { const t = ((u % 2) + 2) % 2; f = t < 1 ? t : 2 - t; }
+  }
+  return ease === 'linear' ? f : (1 - Math.cos(Math.PI * f)) / 2;
+}
+
+function soundLevel(band) {
+  return audio.kind === 'off' ? 0 : (audio.levels[band] || 0);
+}
+
 /* Animated view of the design at the current clock (pure: no state mutation) */
 function animated() {
   const a = state.animation, b = anim.beats;
   const flip = a.flipEvery > 0 && Math.floor(b / a.flipEvery) % 2 === 1;
+  // base line width between Small and Large (% of x); layers that inherit x follow
+  const lo = a.lineMin ?? 100, hi = a.lineMax ?? 100;
+  let lineK = lo / 100;
+  if (lo !== hi) {
+    const f = (a.lineDrive && a.lineDrive !== 'clock') ? soundLevel(a.lineDrive) : cycleF(b, a.linePeriod, a.lineOffset, a.lineMode);
+    lineK = (lo + (hi - lo) * f) / 100;
+  }
+  const baseLine = Math.max(0.5, state.base.line * lineK);
+  // base angle: drift (continuous) + swing towards an end angle
+  let delta = (a.drift || 0) * b;
+  if (a.swingOn && a.swingTo != null) {
+    const f = (a.swingDrive && a.swingDrive !== 'clock') ? soundLevel(a.swingDrive) : travelF(b, a.swingPeriod, a.swingOffset, a.swingMode, a.swingEase);
+    delta += (a.swingTo - state.base.angle) * f;
+  }
   return {
-    phase: a.scroll * b * state.base.line * 1.5,   // lines/beat -> user units (one period per line)
-    angle: state.base.angle + a.drift * b,
+    phase: a.scroll * b * baseLine * 1.5,           // lines/beat -> user units (one period per line)
+    angle: state.base.angle + delta,
+    angleDelta: delta,                              // layers' stripe angles move with the base
+    baseLine,
     invert: state.invert !== flip,
     // spin: continuous (°/beat), step (°/step, hard turn every N beats) or punch (fast eased turn on the beat)
     layerRotate: (L) => {
@@ -75,18 +118,8 @@ function animated() {
     layerOffset: (L) => {
       if (!L.moveOn || L.moveX == null) return [0, 0];
       const [cx, cy] = shapeCenter(L.shape);
-      let f;
-      if (L.moveDrive && L.moveDrive !== 'clock') {
-        f = audio.kind === 'off' ? 0 : audio.levels[L.moveDrive] || 0;
-      } else {
-        const period = L.movePeriod || 4, u = (b - (L.moveOffset || 0)) / period;
-        switch (L.moveMode) {
-          case 'jump': f = u < 0 ? 0 : u % 1; break;                       // A -> B, restart at A
-          case 'hold': f = Math.min(1, Math.max(0, u)); break;             // A -> B once, stay
-          default: { const t = ((u % 2) + 2) % 2; f = t < 1 ? t : 2 - t; } // ping-pong
-        }
-        if (L.moveEase !== 'linear') f = (1 - Math.cos(Math.PI * f)) / 2;
-      }
+      const f = (L.moveDrive && L.moveDrive !== 'clock') ? soundLevel(L.moveDrive)
+              : travelF(b, L.movePeriod, L.moveOffset, L.moveMode, L.moveEase);
       return [(L.moveX - cx) * f, (L.moveY - cy) * f];
     },
     // size: moves between Small and Large (% of design size). On the beat
@@ -94,18 +127,8 @@ function animated() {
     layerScale: (L) => {
       const lo = L.sizeMin ?? 100, hi = L.sizeMax ?? 100;
       if (lo === hi) return lo / 100;
-      if (L.drive && L.drive !== 'clock') {                 // sound level drives the size
-        const lv = audio.kind === 'off' ? 0 : audio.levels[L.drive] || 0;
-        return (lo + (hi - lo) * lv) / 100;
-      }
-      const period = L.sizePeriod || 1, off = L.sizeOffset || 0;
-      const u = (((b - off) / period) % 1 + 1) % 1;          // 0..1 within the cycle
-      let f;                                                  // 1 = large, 0 = small
-      switch (L.sizeMode) {
-        case 'snap':  f = u < 0.5 ? 1 : 0; break;            // hard switch, half cycle each
-        case 'punch': f = (1 - u) * (1 - u); break;          // hit large, ease back to small
-        default:      f = (1 + Math.cos(2 * Math.PI * u)) / 2;   // smooth
-      }
+      const f = (L.drive && L.drive !== 'clock') ? soundLevel(L.drive)
+              : cycleF(b, L.sizePeriod, L.sizeOffset, L.sizeMode);
       return (lo + (hi - lo) * f) / 100;
     },
   };
@@ -170,6 +193,8 @@ function patKey(angle, line, inv) {
 }
 
 let viewPhase = 0;        // stripe scroll offset (user units), shared by all patterns
+let viewBaseLine = 16;    // animated base line width (user units)
+let viewAngleDelta = 0;   // animated base angle change, applied to layer stripes too
 
 function patDef(angle, line, inv) {
   const P = line * 1.5;                       // period = line + gap = x + x/2
@@ -223,9 +248,9 @@ function layerAttrs(L, patterns) {
   if (op.type === 'outline') {
     return `fill="none" stroke="${col(c)}" stroke-width="${op.width}"`;
   }
-  // stripes (layer angles drift together with the base, so relations hold)
-  const line = op.line > 0 ? op.line : state.base.line;
-  const angle = r1((op.angle + state.animation.drift * anim.beats) % 360);
+  // stripes (layer angles move together with the base, so relations hold)
+  const line = op.line > 0 ? op.line : viewBaseLine;
+  const angle = r1((op.angle + viewAngleDelta) % 360);
   const inv = c === 'paper';                    // white lines on black
   const key = patKey(angle, line, inv);
   patterns.set(key, patDef(angle, line, inv));
@@ -237,16 +262,18 @@ function buildSVG(forExport) {
   const view = animated();
   viewInvert = view.invert;
   viewPhase = view.phase;
+  viewBaseLine = r1(view.baseLine);
+  viewAngleDelta = view.angleDelta;
   const baseAngle = r1(view.angle % 360);
   const patterns = new Map();
-  const baseKey = patKey(baseAngle, state.base.line, state.base.inverted);
-  patterns.set(baseKey, patDef(baseAngle, state.base.line, state.base.inverted));
+  const baseKey = patKey(baseAngle, viewBaseLine, state.base.inverted);
+  patterns.set(baseKey, patDef(baseAngle, viewBaseLine, state.base.inverted));
 
   let body = `<rect x="0" y="0" width="${w}" height="${h}" fill="${paper()}"/>`
            + `<rect x="0" y="0" width="${w}" height="${h}" fill="url(#${baseKey})"/>`;
 
   for (const L of state.layers) {
-    if (!L.visible) continue;
+    if (!L.visible || !layerActive(L)) continue;
     const attrs = layerAttrs(L, patterns);
     let shape = scaledShape(L.shape, view.layerScale(L));
     const [ox, oy] = view.layerOffset(L);
@@ -255,7 +282,7 @@ function buildSVG(forExport) {
     const rot = r1(view.layerRotate(L));
     const tf = rot ? `rotate(${rot} ${cx} ${cy})` : '';
     const border = (L.border && L.op.type !== 'outline')
-      ? ` stroke="${col(L.borderColor || 'ink')}" stroke-width="${state.base.line}" stroke-linejoin="miter"` : '';
+      ? ` stroke="${col(L.borderColor || 'ink')}" stroke-width="${viewBaseLine}" stroke-linejoin="miter"` : '';
     const meta = forExport ? '' : ` class="shape" data-id="${L.id}"`;
     body += shapeMarkup(shape, attrs + border + meta, tf);
   }
@@ -274,6 +301,7 @@ function buildSVG(forExport) {
 
 function paint() {
   document.getElementById('preview').innerHTML = buildSVG(false);
+  updatePlayhead();
 }
 
 function renderSVG() {
@@ -535,6 +563,9 @@ function motionCard(L) {
     el('div', { class: 'lhead' },
       el('span', { class: 'lname' }, L.name),
       el('span', { class: 'hint' }, (L.visible ? '' : 'hidden · ') + (moving ? 'moving' : 'still'))),
+    el('p', { class: 'hint' }, (L.tlIn || L.tlOut != null)
+      ? `On the timeline: ${L.tlIn || 0} → ${L.tlOut == null ? 'end' : L.tlOut} beats.`
+      : 'Visible for the whole scene (set in / out on the timeline under the canvas).'),
     el('div', { class: 'grp' }, 'Spin'),
     selectField('Spin mode', L.spinMode || 'continuous',
       [['continuous', 'continuous (°/beat)'], ['step', 'step on the beat (°/step)'], ['punch', 'punch on the beat (°/step)']],
@@ -561,9 +592,7 @@ function motionCard(L) {
           translateShape(L.shape, clone(L.shape), L.moveX - cx, L.moveY - cy);
           roundShape(L.shape); L.moveX = cx; L.moveY = cy; renderAll();
         })),
-      selectField('Drive', L.moveDrive || 'clock',
-        [['clock', 'clock (beats)'], ['low', 'sound: low (bass)'], ['mid', 'sound: mid'], ['high', 'sound: high'], ['all', 'sound: all']],
-        (v) => { L.moveDrive = v; renderAll(); }),
+      selectField('Drive', L.moveDrive || 'clock', DRIVES, (v) => { L.moveDrive = v; renderAll(); }),
       ...((L.moveDrive || 'clock') === 'clock' ? [
         numField('Travel (beats)', L.movePeriod || 4, 0.25, 64, 0.25, (v) => { L.movePeriod = v; renderSVG(); }),
         numField('Offset (beats)', L.moveOffset || 0, 0, 64, 0.25, (v) => { L.moveOffset = v; renderSVG(); }),
@@ -575,11 +604,9 @@ function motionCard(L) {
       el('p', { class: 'hint' }, 'Drag the dashed ghost on the canvas to place the end. It snaps to the grid.'),
     ] : []),
     el('div', { class: 'grp' }, 'Size'),
-    numField('Small (% of size)', L.sizeMin ?? 100, 0, 300, 1, (v) => { L.sizeMin = v; renderSVG(); }),
-    numField('Large (% of size)', L.sizeMax ?? 100, 0, 300, 1, (v) => { L.sizeMax = v; renderSVG(); }),
-    selectField('Drive', L.drive || 'clock',
-      [['clock', 'clock (beats)'], ['low', 'sound: low (bass)'], ['mid', 'sound: mid'], ['high', 'sound: high'], ['all', 'sound: all']],
-      (v) => { L.drive = v; renderAll(); }),
+    numField('Small (% of size)', L.sizeMin ?? 100, 0, 500, 1, (v) => { L.sizeMin = v; renderSVG(); }),
+    numField('Large (% of size)', L.sizeMax ?? 100, 0, 500, 1, (v) => { L.sizeMax = v; renderSVG(); }),
+    selectField('Drive', L.drive || 'clock', DRIVES, (v) => { L.drive = v; renderAll(); }),
     ...((L.drive || 'clock') === 'clock' ? [
       numField('Period (beats)', L.sizePeriod || 1, 0.25, 16, 0.25, (v) => { L.sizePeriod = v; renderSVG(); }),
       numField('Offset (beats)', L.sizeOffset || 0, 0, 16, 0.25, (v) => { L.sizeOffset = v; renderSVG(); }),
@@ -779,6 +806,7 @@ function fillPanel(p, tab) {
 
   if (tab === 'motion') {
     p.append(animationSection());
+    p.append(baseMotionSection());
     p.append(audioSection());
     const wrap = el('div', {});
     state.layers.forEach((L) => wrap.append(motionCard(L)));
@@ -806,7 +834,176 @@ function refreshDocInfo() {
   document.querySelectorAll('.docinfo').forEach((d) => { d.textContent = docInfo(); });
 }
 
-function renderAll() { renderControls(); renderSVG(); updateHistoryButtons(); }
+function renderAll() { renderControls(); renderSVG(); renderTimeline(); updateHistoryButtons(); }
+
+/* ============================================================
+   Timeline — per scene, under the canvas
+   Length = the scene loaded in the editor (or the loop length). Each
+   layer has an in / out point in beats; outside it the layer is hidden.
+   The clock wraps around the length, so the playhead loops.
+   ============================================================ */
+function timelineLength() {
+  const sc = seq.index >= 0 ? state.scenes[seq.index] : null;
+  return Math.max(0.25, sc ? sc.beats : (state.animation.loopBeats || 8));
+}
+
+function sceneBeat() {                       // beat within the scene, wrapping
+  const len = timelineLength();
+  return ((anim.beats % len) + len) % len;
+}
+
+function layerActive(L) {
+  const b = sceneBeat(), len = timelineLength();
+  const tin = L.tlIn || 0, tout = L.tlOut == null ? Infinity : L.tlOut;
+  if (tin <= 0 && tout >= len) return true;
+  return b >= tin && b < tout;
+}
+
+const TL = { rowH: 20, ruler: 18, left: 110, snap: 0.25 };
+let tlDrag = null;
+
+function tlLabel() {
+  const sc = seq.index >= 0 ? state.scenes[seq.index] : null;
+  return sc ? `${sc.name} · ${sc.beats} beats` : `Loop · ${state.animation.loopBeats || 8} beats`;
+}
+
+function renderTimeline() {
+  const host = document.getElementById('timeline');
+  if (!host) return;
+  host.innerHTML = '';
+  const len = timelineLength();
+  const W = Math.max(200, host.clientWidth - TL.left - 12);
+  const rows = state.layers.length;
+  const H = TL.ruler + rows * TL.rowH + 6;
+  const bx = (b) => TL.left + (b / len) * W;
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', TL.left + W + 12);
+  svg.setAttribute('height', H);
+  svg.setAttribute('class', 'tl');
+  const S = (tag, attrs, text) => {
+    const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  // header label
+  svg.append(S('text', { x: 4, y: 12, class: 'tl-title' }, tlLabel()));
+  // ruler
+  svg.append(S('rect', { x: TL.left, y: 0, width: W, height: TL.ruler, class: 'tl-ruler', 'data-tl': 'ruler' }));
+  const step = len > 32 ? 4 : len > 16 ? 2 : 1;
+  for (let b = 0; b <= len + 1e-9; b += step) {
+    const x = bx(b);
+    svg.append(S('line', { x1: x, y1: TL.ruler - 5, x2: x, y2: H, class: 'tl-tick' }));
+    if (b < len) svg.append(S('text', { x: x + 3, y: 12, class: 'tl-num' }, b));
+  }
+  for (let b = 0; b < len; b += step / 4) {
+    if (Math.abs((b / step) % 1) < 1e-9) continue;
+    svg.append(S('line', { x1: bx(b), y1: TL.ruler - 2, x2: bx(b), y2: TL.ruler, class: 'tl-tick' }));
+  }
+  // rows
+  state.layers.forEach((L, i) => {
+    const y = TL.ruler + i * TL.rowH + 3, h = TL.rowH - 6;
+    const sel = L.id === state.selectedId;
+    svg.append(S('rect', { x: 0, y: y - 3, width: TL.left + W + 12, height: TL.rowH, class: 'tl-row' + (sel ? ' sel' : ''), 'data-tl': 'row', 'data-id': L.id }));
+    svg.append(S('text', { x: 4, y: y + h - 4, class: 'tl-name' + (L.visible ? '' : ' off'), 'data-tl': 'row', 'data-id': L.id }, L.name));
+    const tin = Math.max(0, L.tlIn || 0), tout = Math.min(len, L.tlOut == null ? len : L.tlOut);
+    if (tout > tin) {
+      const x0 = bx(tin), x1 = bx(tout);
+      svg.append(S('rect', { x: x0, y, width: x1 - x0, height: h, rx: 3, class: 'tl-bar' + (sel ? ' sel' : ''), 'data-tl': 'bar', 'data-id': L.id }));
+      svg.append(S('rect', { x: x0 - 3, y, width: 6, height: h, class: 'tl-edge', 'data-tl': 'in', 'data-id': L.id }));
+      svg.append(S('rect', { x: x1 - 3, y, width: 6, height: h, class: 'tl-edge', 'data-tl': 'out', 'data-id': L.id }));
+    }
+  });
+  // playhead
+  const px = bx(sceneBeat());
+  svg.append(S('line', { id: 'tl-head', x1: px, y1: 0, x2: px, y2: H, class: 'tl-head' }));
+  host.append(svg);
+  host._geom = { len, W, bx };
+}
+
+function updatePlayhead() {
+  const host = document.getElementById('timeline');
+  const head = document.getElementById('tl-head');
+  if (!host || !head || !host._geom) return;
+  const x = host._geom.bx(sceneBeat());
+  head.setAttribute('x1', x); head.setAttribute('x2', x);
+}
+
+function tlBeatAt(clientX) {
+  const host = document.getElementById('timeline');
+  const svg = host.querySelector('svg');
+  const r = svg.getBoundingClientRect();
+  const { len, W } = host._geom;
+  const b = ((clientX - r.left) - TL.left) / W * len;
+  return Math.max(0, Math.min(len, b));
+}
+
+function onTimelineDown(e) {
+  const t = e.target.closest('[data-tl]');
+  if (!t) return;
+  const kind = t.getAttribute('data-tl');
+  const id = t.getAttribute('data-id');
+  const L = id ? state.layers.find((l) => l.id === id) : null;
+  if (kind === 'ruler') {                                  // scrub / jump
+    const b = tlBeatAt(e.clientX);
+    anim.beats = Math.floor(anim.beats / timelineLength()) * timelineLength() + b;
+    tlDrag = { kind: 'scrub' };
+    paint();
+    e.preventDefault();
+    return;
+  }
+  if (!L) return;
+  if (state.selectedId !== L.id) { state.selectedId = L.id; renderControls(); renderSVG(); }
+  if (kind === 'row') return;
+  const len = timelineLength();
+  const tin = L.tlIn || 0, tout = L.tlOut == null ? len : L.tlOut;
+  tlDrag = { kind, L, tin, tout, b0: tlBeatAt(e.clientX), len };
+  e.preventDefault();
+}
+
+function onTimelineMove(e) {
+  if (!tlDrag) return;
+  if (tlDrag.kind === 'scrub') {
+    const b = tlBeatAt(e.clientX);
+    anim.beats = Math.floor(anim.beats / timelineLength()) * timelineLength() + b;
+    paint();
+    return;
+  }
+  const q = (v) => Math.round(v / TL.snap) * TL.snap;
+  const d = tlBeatAt(e.clientX) - tlDrag.b0;
+  const { L, tin, tout, len } = tlDrag;
+  if (tlDrag.kind === 'in') {
+    L.tlIn = Math.max(0, Math.min(tout - TL.snap, q(tin + d)));
+  } else if (tlDrag.kind === 'out') {
+    const v = Math.min(len, Math.max(tin + TL.snap, q(tout + d)));
+    L.tlOut = v >= len ? null : v;
+  } else {                                                 // bar: move both
+    const w = tout - tin;
+    let ni = q(tin + d);
+    ni = Math.max(0, Math.min(len - w, ni));
+    L.tlIn = ni;
+    L.tlOut = ni + w >= len ? null : ni + w;
+  }
+  if (L.tlIn === 0) delete L.tlIn;
+  renderTimeline();
+  paint();
+}
+
+function onTimelineUp() {
+  if (!tlDrag) return;
+  const was = tlDrag.kind;
+  tlDrag = null;
+  if (was !== 'scrub') markDirty();
+}
+
+function initTimeline() {
+  const host = document.getElementById('timeline');
+  host.addEventListener('pointerdown', onTimelineDown);
+  window.addEventListener('pointermove', onTimelineMove);
+  window.addEventListener('pointerup', onTimelineUp);
+  window.addEventListener('resize', renderTimeline);
+}
 
 /* ============================================================
    Projects — save / load
@@ -996,6 +1193,32 @@ function advanceSequence() {
   return 'next';
 }
 
+/* ---------- Sequence files ---------- */
+function exportSequence() {
+  if (!state.scenes.length) { alert('No scenes to save yet.'); return; }
+  const d = { app: 'linework-sequence', version: 1, name: project.name, savedAt: new Date().toISOString(),
+              sequence: clone(state.sequence), scenes: clone(state.scenes) };
+  const name = (project.name || 'Untitled').replace(/[^\w\- ]+/g, '').trim() || 'Untitled';
+  download(new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }), name + '.sequence.json');
+}
+
+function importSequenceFile(file) {
+  const fr = new FileReader();
+  fr.onload = () => {
+    let d;
+    try { d = JSON.parse(fr.result); } catch (e) { alert('Could not read this file: ' + e.message); return; }
+    if (!d || d.app !== 'linework-sequence' || !Array.isArray(d.scenes)) { alert('Not a Linework sequence file.'); return; }
+    const replace = state.scenes.length ? confirm(`Replace the ${state.scenes.length} current scene(s)?\nCancel appends the ${d.scenes.length} loaded scene(s) instead.`) : true;
+    const incoming = d.scenes.map((s) => ({ ...s, id: nid() }));
+    bumpUid(JSON.stringify(incoming));
+    if (replace) { state.scenes = incoming; if (d.sequence) state.sequence = { ...state.sequence, ...d.sequence }; }
+    else state.scenes.push(...incoming);
+    seq.playing = false; seq.index = -1;
+    renderAll();
+  };
+  fr.readAsText(file);
+}
+
 function sceneCard(sc, i) {
   const active = seq.playing && seq.index === i;
   return el('div', { class: 'layer' + (active ? ' active' : '') },
@@ -1004,7 +1227,7 @@ function sceneCard(sc, i) {
       btn('▲', () => { if (i > 0) { [state.scenes[i - 1], state.scenes[i]] = [state.scenes[i], state.scenes[i - 1]]; renderAll(); } }, 'mini'),
       btn('▼', () => { if (i < state.scenes.length - 1) { [state.scenes[i + 1], state.scenes[i]] = [state.scenes[i], state.scenes[i + 1]]; renderAll(); } }, 'mini'),
       btn('✕', () => { state.scenes.splice(i, 1); if (seq.index >= state.scenes.length) seq.index = -1; renderAll(); }, 'mini danger')),
-    numField('Length (beats)', sc.beats, 1, 256, 1, (v) => { sc.beats = v; markDirty(); }),
+    numField('Length (beats)', sc.beats, 1, 256, 1, (v) => { sc.beats = v; renderTimeline(); markDirty(); }),
     el('div', { class: 'addrow' },
       btn('Load into editor', () => { seq.playing = false; loadScene(i); }),
       btn('Update from editor', () => updateScene(i))),
@@ -1033,6 +1256,15 @@ function sequenceTab(p) {
       el('button', { type: 'button', class: 'recbtn', disabled: rec.busy ? 'true' : null,
                      onclick: () => recordLoop(total, true) }, rec.busy ? '● Recording…' : '● Record sequence')),
     el('p', { class: 'hint' }, 'Records all scenes once, in real time, with sound if a source is active.'),
+  ]));
+  const seqFile = el('input', { type: 'file', accept: '.json,application/json',
+    onchange: (e) => { const f = e.target.files[0]; if (f) importSequenceFile(f); e.target.value = ''; } });
+  p.append(section('Sequence file', [
+    el('div', { class: 'addrow' },
+      btn('Download sequence', exportSequence),
+      btn('Upload sequence…', () => seqFile.click())),
+    el('div', { hidden: true }, seqFile),
+    el('p', { class: 'hint' }, 'All scenes and the loop setting as one JSON file. Uploading asks whether to replace the current scenes or append.'),
   ]));
 }
 
@@ -1259,7 +1491,7 @@ function recordRow() {
     el('div', { class: 'row' },
       el('button', { type: 'button', class: 'recbtn', disabled: rec.busy ? 'true' : null,
                      onclick: () => recordLoop(a.loopBeats || 8) }, rec.busy ? '● Recording…' : '● Record loop'),
-      numField('Length (beats)', a.loopBeats || 8, 1, 128, 1, (v) => { a.loopBeats = v; markDirty(); })),
+      numField('Length (beats)', a.loopBeats || 8, 1, 128, 1, (v) => { a.loopBeats = v; renderTimeline(); markDirty(); })),
     el('p', { class: 'hint' }, `Records ${W} × ${H} px in real time at the current BPM, as WebM (Chrome / Firefox; Safari gives MP4). `
       + 'For a seamless loop, make the length a multiple of every period. Frame rate depends on the machine: HD is fine on a laptop with a GPU, 4K may drop frames.'),
   ]);
@@ -1285,10 +1517,44 @@ function animationSection() {
       btn('⟲ Reset', resetClock),
       btn('⛶ Fullscreen', toggleFullscreen)),
     numField('BPM', a.bpm, 20, 300, 1, (v) => { a.bpm = v; markDirty(); }),
-    numField('Scroll (lines/beat)', a.scroll, -4, 4, 0.05, (v) => { a.scroll = v; paint(); markDirty(); }),
-    numField('Drift (°/beat)', a.drift, -45, 45, 0.5, (v) => { a.drift = v; paint(); markDirty(); }),
     numField('Flip every N beats', a.flipEvery, 0, 32, 1, (v) => { a.flipEvery = v; paint(); markDirty(); }),
     el('p', { class: 'hint' }, 'Rates are per beat, so a change of tempo keeps the same feel. Space toggles play; F toggles fullscreen. The design itself never changes while playing.'),
+  ]);
+}
+
+const DRIVES = [['clock', 'clock (beats)'], ['low', 'sound: low (bass)'], ['mid', 'sound: mid'], ['high', 'sound: high'], ['all', 'sound: all']];
+
+function baseMotionSection() {
+  const a = state.animation, p = () => { paint(); markDirty(); };
+  return section('Base field', [
+    numField('Scroll (lines/beat)', a.scroll || 0, -4, 4, 0.05, (v) => { a.scroll = v; p(); }),
+    numField('Drift (°/beat)', a.drift || 0, -45, 45, 0.5, (v) => { a.drift = v; p(); }),
+    el('div', { class: 'grp' }, 'Line width (layers inheriting x follow)'),
+    numField('Small (% of x)', a.lineMin ?? 100, 10, 500, 1, (v) => { a.lineMin = v; p(); }),
+    numField('Large (% of x)', a.lineMax ?? 100, 10, 500, 1, (v) => { a.lineMax = v; p(); }),
+    selectField('Drive', a.lineDrive || 'clock', DRIVES, (v) => { a.lineDrive = v; renderAll(); }),
+    ...((a.lineDrive || 'clock') === 'clock' ? [
+      numField('Period (beats)', a.linePeriod || 1, 0.25, 16, 0.25, (v) => { a.linePeriod = v; p(); }),
+      numField('Offset (beats)', a.lineOffset || 0, 0, 16, 0.25, (v) => { a.lineOffset = v; p(); }),
+      selectField('Motion', a.lineMode || 'smooth',
+        [['smooth', 'smooth (ease between)'], ['snap', 'snap (hard switch)'], ['punch', 'punch (large on beat, ease back)']],
+        (v) => { a.lineMode = v; p(); }),
+    ] : [el('p', { class: 'hint' }, 'Width follows the sound level: quiet = Small, loud = Large.')]),
+    el('div', { class: 'grp' }, 'Angle (start = base angle)'),
+    checkField('Swing to an end angle', !!a.swingOn, (v) => { a.swingOn = v; if (a.swingTo == null) a.swingTo = (state.base.angle + 90) % 180; renderAll(); }),
+    ...(a.swingOn ? [
+      numField('End angle°', a.swingTo ?? 90, -180, 360, 1, (v) => { a.swingTo = v; p(); }),
+      selectField('Drive', a.swingDrive || 'clock', DRIVES, (v) => { a.swingDrive = v; renderAll(); }),
+      ...((a.swingDrive || 'clock') === 'clock' ? [
+        numField('Travel (beats)', a.swingPeriod || 4, 0.25, 64, 0.25, (v) => { a.swingPeriod = v; p(); }),
+        numField('Offset (beats)', a.swingOffset || 0, 0, 64, 0.25, (v) => { a.swingOffset = v; p(); }),
+        selectField('Return', a.swingMode || 'pingpong',
+          [['pingpong', 'ping-pong (back and forth)'], ['jump', 'jump (restart at start)'], ['hold', 'hold (stay at end)']],
+          (v) => { a.swingMode = v; p(); }),
+        selectField('Ease', a.swingEase || 'smooth', [['smooth', 'smooth'], ['linear', 'linear']], (v) => { a.swingEase = v; p(); }),
+      ] : [el('p', { class: 'hint' }, 'Angle follows the sound level: quiet = base angle, loud = end angle.')]),
+    ] : []),
+    el('p', { class: 'hint' }, 'Layer stripes turn along with the base, so orientation contrasts stay intact.'),
   ]);
 }
 
@@ -1678,6 +1944,8 @@ if (typeof document !== 'undefined') {
   flushHistory();      // seed the stable snapshot; nothing to undo yet
   restoreAutosave();   // pick up where the browser left off
   initCanvas();
+  initTimeline();
+  renderTimeline();
 } else if (typeof module !== 'undefined') {
-  module.exports = { state, anim, audio, seq, project, projectData, buildSVG, gridLines, snapMoveDelta, snapPoint, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
+  module.exports = { state, anim, audio, seq, project, projectData, buildSVG, layerActive, timelineLength, gridLines, snapMoveDelta, snapPoint, setFormat, reformat, FORMATS, exportPixels, undo, redo, flushHistory };  // headless / tests
 }

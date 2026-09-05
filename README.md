@@ -90,9 +90,12 @@ changes while playing (undo stays clean, any frame exports as a still):
 - **Drift** — base angle rotates (°/beat); layer stripe angles drift along with it.
 - **Flip every N beats** — global black/white inversion on a beat grid.
 - **Spin** (per layer) — the shape rotates (°/beat).
-- **Pulse** (per layer) — the shape breathes: ±% around its design size, one
-  cycle per **Period** beats, shifted by **Offset** beats (so layers can
-  alternate). The geometry scales, not the stripes: line width stays x.
+- **Small / Large** (per layer) — two sizes as % of the design size (100 = as
+  drawn). The shape moves between them once per **Period** beats, shifted by
+  **Offset** beats (so layers can alternate). On the beat it is at Large;
+  **Motion** decides the way back: *smooth* (ease), *snap* (hard switch, half
+  cycle each) or *punch* (hit large, ease back to small). The geometry scales,
+  not the stripes: line width stays x.
 
 **Space** toggles play, **F** toggles fullscreen on the stage (black background,
 for a beamer or LED wall). Rendering is plain SVG; at A4 size this runs at 60 fps

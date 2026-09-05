@@ -40,11 +40,20 @@ function animated() {
     angle: state.base.angle + a.drift * b,
     invert: state.invert !== flip,
     layerRotate: (L) => L.rotate + (L.spin || 0) * b,
-    // pulse: size breathes ±pulse % around the design size, one cycle per period
+    // size: moves between Small and Large (% of design size). On the beat
+    // (offset) the shape is at Large; how it returns depends on the motion.
     layerScale: (L) => {
-      if (!L.pulse) return 1;
-      const period = L.pulsePeriod || 4, off = L.pulseOffset || 0;
-      return 1 + (L.pulse / 100) * Math.sin(2 * Math.PI * (b - off) / period);
+      const lo = L.sizeMin ?? 100, hi = L.sizeMax ?? 100;
+      if (lo === hi) return lo / 100;
+      const period = L.sizePeriod || 1, off = L.sizeOffset || 0;
+      const u = (((b - off) / period) % 1 + 1) % 1;          // 0..1 within the cycle
+      let f;                                                  // 1 = large, 0 = small
+      switch (L.sizeMode) {
+        case 'snap':  f = u < 0.5 ? 1 : 0; break;            // hard switch, half cycle each
+        case 'punch': f = (1 - u) * (1 - u); break;          // hit large, ease back to small
+        default:      f = (1 + Math.cos(2 * Math.PI * u)) / 2;   // smooth
+      }
+      return (lo + (hi - lo) * f) / 100;
     },
   };
 }
@@ -54,12 +63,13 @@ function animated() {
 function scaledShape(s, k) {
   if (k === 1) return s;
   const [cx, cy] = shapeCenter(s);
-  const X = (x) => cx + (x - cx) * k, Y = (y) => cy + (y - cy) * k;
+  const q = (v) => Math.round(v * 100) / 100;
+  const X = (x) => q(cx + (x - cx) * k), Y = (y) => q(cy + (y - cy) * k), S = (v) => q(v * k);
   switch (s.type) {
-    case 'circle':  return { ...s, r: s.r * k };
-    case 'sector':  return { ...s, r: s.r * k };
-    case 'ellipse': return { ...s, rx: s.rx * k, ry: s.ry * k };
-    case 'rect':    return { ...s, x: X(s.x), y: Y(s.y), w: s.w * k, h: s.h * k, r: s.r * k };
+    case 'circle':  return { ...s, r: S(s.r) };
+    case 'sector':  return { ...s, r: S(s.r) };
+    case 'ellipse': return { ...s, rx: S(s.rx), ry: S(s.ry) };
+    case 'rect':    return { ...s, x: X(s.x), y: Y(s.y), w: S(s.w), h: S(s.h), r: S(s.r) };
     case 'polygon': return { ...s, points: s.points.map((p) => [X(p[0]), Y(p[1])]) };
   }
 }
@@ -92,7 +102,7 @@ function defaultOp(type) {
 
 function defaultLayer(type) {
   return { id: nid(), name: cap(type), visible: true, rotate: 0,
-           spin: 0, pulse: 0, pulsePeriod: 4, pulseOffset: 0,
+           spin: 0, sizeMin: 100, sizeMax: 100, sizePeriod: 1, sizeOffset: 0, sizeMode: 'smooth',
            color: 'ink', border: false, borderColor: 'ink',
            shape: makeShape(type), op: defaultOp('stripes') };
 }
@@ -437,9 +447,13 @@ function layerCard(L, i) {
       : null,
     el('div', { class: 'sub' }, 'Animation'),
     numField('Spin (°/beat)', L.spin || 0, -90, 90, 0.5, (v) => { L.spin = v; renderSVG(); }),
-    numField('Pulse (±%)', L.pulse || 0, 0, 100, 1, (v) => { L.pulse = v; renderSVG(); }),
-    numField('Period (beats)', L.pulsePeriod || 4, 0.25, 16, 0.25, (v) => { L.pulsePeriod = v; renderSVG(); }),
-    numField('Offset (beats)', L.pulseOffset || 0, 0, 16, 0.25, (v) => { L.pulseOffset = v; renderSVG(); }),
+    numField('Small (% of size)', L.sizeMin ?? 100, 0, 300, 1, (v) => { L.sizeMin = v; renderSVG(); }),
+    numField('Large (% of size)', L.sizeMax ?? 100, 0, 300, 1, (v) => { L.sizeMax = v; renderSVG(); }),
+    numField('Period (beats)', L.sizePeriod || 1, 0.25, 16, 0.25, (v) => { L.sizePeriod = v; renderSVG(); }),
+    numField('Offset (beats)', L.sizeOffset || 0, 0, 16, 0.25, (v) => { L.sizeOffset = v; renderSVG(); }),
+    selectField('Motion', L.sizeMode || 'smooth',
+      [['smooth', 'smooth (ease between)'], ['snap', 'snap (hard switch)'], ['punch', 'punch (large on beat, ease back)']],
+      (v) => { L.sizeMode = v; renderSVG(); }),
   );
 }
 
@@ -667,7 +681,7 @@ function animationSection() {
     numField('Scroll (lines/beat)', a.scroll, -4, 4, 0.05, (v) => { a.scroll = v; paint(); markDirty(); }),
     numField('Drift (°/beat)', a.drift, -45, 45, 0.5, (v) => { a.drift = v; paint(); markDirty(); }),
     numField('Flip every N beats', a.flipEvery, 0, 32, 1, (v) => { a.flipEvery = v; paint(); markDirty(); }),
-    el('p', { class: 'hint' }, 'Rates are per beat, so a change of tempo keeps the same feel. Each layer has its own Spin and Pulse (size breathing) in its card. Space toggles play; F toggles fullscreen.'),
+    el('p', { class: 'hint' }, 'Rates are per beat, so a change of tempo keeps the same feel. Each layer has its own Spin and Small/Large size in its card. Space toggles play; F toggles fullscreen.'),
   ]);
 }
 
@@ -710,7 +724,8 @@ function loadDefault() {                  // A4 portrait starting canvas (units:
   state.animation = { bpm: 120, scroll: 0, drift: 0, flipEvery: 0 };
   anim.beats = 0;
   state.layers = [
-    { id: nid(), name: 'Circle', visible: true, rotate: 0, spin: 0, pulse: 0, pulsePeriod: 4, pulseOffset: 0,
+    { id: nid(), name: 'Circle', visible: true, rotate: 0, spin: 0,
+      sizeMin: 100, sizeMax: 100, sizePeriod: 1, sizeOffset: 0, sizeMode: 'smooth',
       color: 'ink', border: true, borderColor: 'ink',
       shape: { type: 'circle', cx: 1050, cy: 1485, r: 700 },
       op: { type: 'stripes', angle: 90, line: 0 } },

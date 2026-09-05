@@ -26,15 +26,19 @@ base field            angle + line width x   (gap is always x / 2)
 Every layer can be rotated.
 
 ### Operations
-- **stripes** — fill the shape with a stripe pattern. One operation covers three
-  effects: change **angle** (orientation shift), toggle **inverted**
-  (figure-ground swap), change **line** width (local density). `line = 0` inherits
-  the base width.
-- **fill** — solid fill: `paper` (knock-out / negative space) or `ink` (solid black).
+- **stripes** — fill the shape with a stripe pattern: change **angle**
+  (orientation shift) or **line** width (local density). `line = 0` inherits the
+  base width.
+- **fill** — solid fill: white gives a knock-out (negative space), black a solid.
 - **outline** — stroke only, for construction lines.
 
+Every layer has a **colour**, black (ink) or white (paper). For stripes it is the
+line colour (white lines on black = figure-ground swap), for fill the fill, for
+outline the stroke. It stays when you switch operation.
+
 Any layer can also carry a **border** — a stroke around the shape at the base line
-width `x` (so a white knock-out with a black outline gives the dome look).
+width `x`, in its own colour (a white knock-out with a black border gives the
+dome look).
 
 The stripe rule is locked: **black line = x, gap = x / 2** (so ⅔ ink coverage).
 A global **Invert** swaps black and white for the whole composition.

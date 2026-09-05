@@ -46,6 +46,8 @@ function animated() {
 let viewInvert = false;   // set per render from animated().invert
 const ink   = () => (viewInvert ? '#ffffff' : '#000000');
 const paper = () => (viewInvert ? '#000000' : '#ffffff');
+const col   = (c) => (c === 'paper' ? paper() : ink());   // layer colour name -> hex
+const COLOURS = [['ink', 'black (ink)'], ['paper', 'white (paper)']];
 
 /* ---------- Defaults ---------- */
 function makeShape(type) {
@@ -59,14 +61,17 @@ function makeShape(type) {
   }
 }
 
+/* Colour lives on the layer (not the operation) so it survives switching the
+   operation: stripes -> line colour, fill -> fill colour, outline -> stroke. */
 function defaultOp(type) {
-  if (type === 'fill')    return { type: 'fill', color: 'paper' };
+  if (type === 'fill')    return { type: 'fill' };
   if (type === 'outline') return { type: 'outline', width: 4 };
-  return { type: 'stripes', angle: (state.base.angle + 90) % 180, line: 0, inverted: false };
+  return { type: 'stripes', angle: (state.base.angle + 90) % 180, line: 0 };
 }
 
 function defaultLayer(type) {
-  return { id: nid(), name: cap(type), visible: true, rotate: 0, spin: 0, border: false,
+  return { id: nid(), name: cap(type), visible: true, rotate: 0, spin: 0,
+           color: 'ink', border: false, borderColor: 'ink',
            shape: makeShape(type), op: defaultOp('stripes') };
 }
 
@@ -125,18 +130,20 @@ function shapeMarkup(s, attrs, tf) {
   }
 }
 
-function layerAttrs(op, patterns) {
+function layerAttrs(L, patterns) {
+  const op = L.op, c = L.color || 'ink';
   if (op.type === 'fill') {
-    return `fill="${op.color === 'ink' ? ink() : paper()}"`;
+    return `fill="${col(c)}"`;
   }
   if (op.type === 'outline') {
-    return `fill="none" stroke="${ink()}" stroke-width="${op.width}"`;
+    return `fill="none" stroke="${col(c)}" stroke-width="${op.width}"`;
   }
   // stripes (layer angles drift together with the base, so relations hold)
   const line = op.line > 0 ? op.line : state.base.line;
   const angle = r1((op.angle + state.animation.drift * anim.beats) % 360);
-  const key = patKey(angle, line, op.inverted);
-  patterns.set(key, patDef(angle, line, op.inverted));
+  const inv = c === 'paper';                    // white lines on black
+  const key = patKey(angle, line, inv);
+  patterns.set(key, patDef(angle, line, inv));
   return `fill="url(#${key})"`;
 }
 
@@ -155,12 +162,12 @@ function buildSVG(forExport) {
 
   for (const L of state.layers) {
     if (!L.visible) continue;
-    const attrs = layerAttrs(L.op, patterns);
+    const attrs = layerAttrs(L, patterns);
     const [cx, cy] = shapeCenter(L.shape);
     const rot = r1(view.layerRotate(L));
     const tf = rot ? `rotate(${rot} ${cx} ${cy})` : '';
     const border = (L.border && L.op.type !== 'outline')
-      ? ` stroke="${ink()}" stroke-width="${state.base.line}" stroke-linejoin="miter"` : '';
+      ? ` stroke="${col(L.borderColor || 'ink')}" stroke-width="${state.base.line}" stroke-linejoin="miter"` : '';
     const meta = forExport ? '' : ` class="shape" data-id="${L.id}"`;
     body += shapeMarkup(L.shape, attrs + border + meta, tf);
   }
@@ -357,17 +364,13 @@ function polygonField(L) {
 
 function opFields(L) {
   const op = L.op, r = renderSVG;
-  if (op.type === 'fill') {
-    return [selectField('Colour', op.color,
-      [['paper', 'paper — knock-out'], ['ink', 'ink — solid']], (v) => { op.color = v; r(); })];
-  }
+  if (op.type === 'fill') return [];
   if (op.type === 'outline') {
     return [numField('Stroke', op.width, 1, 80, 1, (v) => { op.width = v; r(); })];
   }
   return [
     numField('Angle°', op.angle, 0, 180, 1, (v) => { op.angle = v; r(); }),
     numField('Line (0 = base)', op.line, 0, 240, 1, (v) => { op.line = v; r(); }),
-    checkField('Inverted', op.inverted, (v) => { op.inverted = v; r(); }),
   ];
 }
 
@@ -402,10 +405,14 @@ function layerCard(L, i) {
     numField('Rotate°', L.rotate, -180, 180, 1, (v) => { L.rotate = v; renderSVG(); }),
     numField('Spin (°/beat)', L.spin || 0, -90, 90, 0.5, (v) => { L.spin = v; renderSVG(); }),
     selectField('Operation', L.op.type,
-      [['stripes', 'stripes'], ['fill', 'fill'], ['outline', 'outline']],
+      [['stripes', 'stripes'], ['fill', 'fill (solid / knock-out)'], ['outline', 'outline']],
       (t) => { L.op = defaultOp(t); renderAll(); }),
+    selectField('Colour', L.color || 'ink', COLOURS, (v) => { L.color = v; renderSVG(); }),
     ...opFields(L),
-    checkField('Border (width = x)', !!L.border, (v) => { L.border = v; renderSVG(); }),
+    checkField('Border (width = x)', !!L.border, (v) => { L.border = v; renderAll(); }),
+    L.border && L.op.type !== 'outline'
+      ? selectField('Border colour', L.borderColor || 'ink', COLOURS, (v) => { L.borderColor = v; renderSVG(); })
+      : null,
   );
 }
 
@@ -549,7 +556,8 @@ function renderControls() {
   p.append(section('Base field', [
     numField('Angle°', state.base.angle, 0, 180, 1, (v) => { state.base.angle = v; renderSVG(); }),
     numField('Line width x', state.base.line, 1, 240, 1, (v) => { state.base.line = v; renderSVG(); }),
-    checkField('Inverted (white-dominant)', state.base.inverted, (v) => { state.base.inverted = v; renderSVG(); }),
+    selectField('Line colour', state.base.inverted ? 'paper' : 'ink', COLOURS,
+      (v) => { state.base.inverted = v === 'paper'; renderSVG(); }),
     el('p', { class: 'hint' }, 'Gap is locked to x / 2.' + lineInfo()),
   ]));
 
@@ -675,9 +683,9 @@ function loadDefault() {                  // A4 portrait starting canvas (units:
   state.animation = { bpm: 120, scroll: 0, drift: 0, flipEvery: 0 };
   anim.beats = 0;
   state.layers = [
-    { id: nid(), name: 'Circle', visible: true, rotate: 0, spin: 0, border: true,
+    { id: nid(), name: 'Circle', visible: true, rotate: 0, spin: 0, color: 'ink', border: true, borderColor: 'ink',
       shape: { type: 'circle', cx: 1050, cy: 1485, r: 700 },
-      op: { type: 'stripes', angle: 90, line: 0, inverted: false } },
+      op: { type: 'stripes', angle: 90, line: 0 } },
   ];
   state.selectedId = null;
   renderAll();
